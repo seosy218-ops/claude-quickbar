@@ -38,6 +38,8 @@ The exe lands in `desktop/target/release/quickbar.exe`.
 - **Drag the ⚡** to move the bar. It stays at that spot relative to the nearest corner of Claude's window, so it follows Claude when Claude is moved or resized.
 - **Tray icon** (a ⚡ in the notification area): **Start with Windows** and **Quit**. Start with Windows starts this very exe at sign-in, so move the exe first, then tick it.
 
+![The box for adding or editing a command: the command, an optional label, and the fill-in-only switch](assets/add-command.png)
+
 The bar follows Claude's light or dark theme, and hides while Claude is minimized or behind other windows.
 
 ## Configure
