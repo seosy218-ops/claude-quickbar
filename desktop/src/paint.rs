@@ -1,27 +1,32 @@
-//! Drawing shared by the bar, the command box and the menu: window shape and
-//! shadow from DWM, anti-aliased rounded blocks from GDI+, ClearType text from GDI.
+//! Drawing shared by the bar, the phrase box and the menu: anti-aliased rounded blocks
+//! from GDI+, ClearType text from GDI. The phrase box and the menu are plain windows
+//! that DWM rounds, rings and shades (`shape`, `Canvas`); the bar is a layered window
+//! with nothing but its chips (`Layer`).
 
-use windows_sys::Win32::Foundation::{HWND, RECT, SIZE};
+use windows_sys::Win32::Foundation::{HWND, POINT, RECT, SIZE};
 use windows_sys::Win32::Graphics::Dwm::{
     DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush,
-    DRAW_TEXT_FORMAT, DT_CENTER, DT_LEFT, DT_RIGHT, DT_SINGLELINE, DT_VCENTER, DeleteDC,
-    DeleteObject, DrawTextW, EndPaint, FillRect, GetDC, GetTextExtentPoint32W, GetTextMetricsW,
-    HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, PAINTSTRUCT, ReleaseDC, SRCCOPY, SelectObject, SetBkMode,
-    SetTextColor, TEXTMETRICW, TRANSPARENT,
+    AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, BeginPaint,
+    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW,
+    CreateSolidBrush, DIB_RGB_COLORS, DRAW_TEXT_FORMAT, DT_CENTER, DT_LEFT, DT_RIGHT,
+    DT_SINGLELINE, DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, GdiFlush,
+    GetDC, GetTextExtentPoint32W, GetTextMetricsW, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ,
+    PAINTSTRUCT, ReleaseDC, SRCCOPY, SelectObject, SetBkMode, SetTextColor, TEXTMETRICW,
+    TRANSPARENT,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
-    FillModeAlternate, FlushIntentionFlush, GdipAddPathArc, GdipAddPathRectangle,
-    GdipClosePathFigure, GdipCreateFromHDC, GdipCreatePath, GdipCreatePen1, GdipCreateSolidFill,
-    GdipDeleteBrush, GdipDeleteGraphics, GdipDeletePath, GdipDeletePen, GdipDrawPath, GdipFillPath,
-    GdipFlush, GdipSetPixelOffsetMode, GdipSetSmoothingMode, GdiplusShutdown, GdiplusStartup,
-    GdiplusStartupInput, GpGraphics, GpPath, Ok, PixelOffsetModeHalf, SmoothingModeAntiAlias,
-    UnitPixel,
+    FillModeAlternate, FlushIntentionFlush, FlushIntentionSync, GdipAddPathArc,
+    GdipAddPathRectangle, GdipClosePathFigure, GdipCreateBitmapFromScan0, GdipCreateFromHDC,
+    GdipCreatePath, GdipCreatePen1, GdipCreateSolidFill, GdipDeleteBrush, GdipDeleteGraphics,
+    GdipDeletePath, GdipDeletePen, GdipDisposeImage, GdipDrawPath, GdipFillPath, GdipFlush,
+    GdipGetImageGraphicsContext, GdipSetPixelOffsetMode, GdipSetSmoothingMode, GdiplusShutdown,
+    GdiplusStartup, GdiplusStartupInput, GpBitmap, GpGraphics, GpPath, Ok, PixelFormatAlpha,
+    PixelFormatGDI, PixelFormatPAlpha, PixelOffsetModeHalf, SmoothingModeAntiAlias, UnitPixel,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
-use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetClientRect, ULW_ALPHA, UpdateLayeredWindow};
 
 use crate::win::wide;
 
@@ -72,10 +77,10 @@ impl Color {
 // Kept whole after Claude, though nothing here is ghost, orange or a pressed toggle yet.
 #[allow(dead_code)]
 pub struct Palette {
-    /// Behind the bar, the command box and the menu: Claude's popovers
+    /// Behind the phrase box and the menu: Claude's popovers
     /// (`--cds-surface-popover`), which the prompt card shares.
     pub surface: Color,
-    /// The 1px edge DWM draws around the bar and the command box, opaque, on the
+    /// The 1px edge DWM draws around the phrase box, opaque, on the
     /// outermost ring of client pixels (the prompt card's edge as seen on screen).
     pub window_border: Color,
     /// Thin ring around cards and fields (`--cds-border`).
@@ -126,14 +131,26 @@ pub struct Palette {
     /// The line just inside the edge of whatever has the focus ring: the inset of
     /// `--cds-focus-shadow`, which is `--cds-page-bg`.
     pub focus_inset: Color,
-    /// Buttons on the bar and the other buttons of a box (Cancel): Claude's
-    /// secondary button (`--cds-fill-secondary`, its `-ring`, `-hover`, held down),
-    /// laid on the surface. Opaque, but for the ring and the shadow under it.
+    /// The other buttons of a box (Cancel): Claude's secondary button
+    /// (`--cds-fill-secondary`, its `-ring`, `-hover`, held down), laid on the surface.
+    /// Opaque, but for the ring and the shadow under it.
     pub chip: Color,
     pub chip_ring: Option<Color>,
     pub chip_shadow: Option<Color>,
     pub chip_hover: Color,
     pub chip_down: Color,
+    /// Buttons on the bar: the pills above Claude's prompt (Local, the folder, the
+    /// branch), as is (`--cds-fill-secondary`) and under the mouse
+    /// (`--cds-fill-secondary-hover`), laid on the Code page (`--cds-neutral-40`);
+    /// their ring and shadow come from `shadow-field`. The fills are kept opaque, so
+    /// the text on them can be ClearType; the ring and the shadow are see-through and
+    /// land on whatever the bar floats over.
+    /// Claude has no look of its own for a held pill, so held down is under the mouse.
+    /// Their text and icons are `text_secondary`.
+    pub pill: Color,
+    pub pill_ring: Option<Color>,
+    pub pill_shadow: Option<Color>,
+    pub pill_hover: Color,
     /// Behind a menu item that deletes, under the mouse (`--cds-fill-danger`) and held
     /// down, and its text there (`--cds-on-danger`).
     pub danger: Color,
@@ -190,6 +207,11 @@ impl Palette {
         chip_shadow: Some(Color::rgba(0x00, 0x00, 0x00, 0x0d)),
         chip_hover: Color::rgb(0xf3, 0xf3, 0xf3),
         chip_down: Color::rgb(0xe7, 0xe7, 0xe7),
+        // 10% white, and 5% near-black under the mouse, on the page's #f3f3f0.
+        pill: Color::rgb(0xf4, 0xf4, 0xf2),
+        pill_ring: Some(Color::rgba(0x0b, 0x0b, 0x0b, 0x1a)),
+        pill_shadow: Some(Color::rgba(0x00, 0x00, 0x00, 0x0d)),
+        pill_hover: Color::rgb(0xe7, 0xe7, 0xe4),
         danger: Color::rgb(0xd0, 0x3b, 0x3b),
         danger_down: Color::rgb(0xbb, 0x35, 0x35),
         on_danger: Color::rgb(0xff, 0xff, 0xff),
@@ -237,6 +259,12 @@ impl Palette {
         chip_shadow: None,
         chip_hover: Color::rgb(0x3f, 0x3f, 0x3f),
         chip_down: Color::rgb(0x4d, 0x4d, 0x4c),
+        // Measured on the Local pill, on the page's #131313; 10% white alone would
+        // make #2b2b2b. Under the mouse, 14% white there. The shadow does not show.
+        pill: Color::rgb(0x29, 0x29, 0x29),
+        pill_ring: None,
+        pill_shadow: None,
+        pill_hover: Color::rgb(0x34, 0x34, 0x34),
         danger: Color::rgb(0xd0, 0x3b, 0x3b),
         danger_down: Color::rgb(0xbb, 0x35, 0x35),
         on_danger: Color::rgb(0xff, 0xff, 0xff),
@@ -461,29 +489,8 @@ impl Canvas {
     /// An anti-aliased block over `rect` with corners of `radius` pixels, filled and/or
     /// ringed with a 1px line inside its edge. Either color may be see-through.
     pub fn rounded(&self, rect: &RECT, radius: i32, fill: Option<Color>, ring: Option<Color>) {
-        if self.graphics.is_null() {
-            return;
-        }
-        unsafe {
-            if let Some(color) = fill
-                && let Some(path) = Path::rounded(rect, radius as f32, 0.0)
-            {
-                let mut brush = std::ptr::null_mut();
-                if GdipCreateSolidFill(color.0, &mut brush) == Ok {
-                    GdipFillPath(self.graphics, brush.cast(), path.0);
-                    GdipDeleteBrush(brush.cast());
-                }
-            }
-            // The line runs along pixel centers half a pixel in.
-            if let Some(color) = ring
-                && let Some(path) = Path::rounded(rect, radius as f32, 0.5)
-            {
-                let mut pen = std::ptr::null_mut();
-                if GdipCreatePen1(color.0, 1.0, UnitPixel, &mut pen) == Ok {
-                    GdipDrawPath(self.graphics, pen, path.0);
-                    GdipDeletePen(pen);
-                }
-            }
+        if !self.graphics.is_null() {
+            unsafe { rounded(self.graphics, rect, radius, fill, ring) };
         }
     }
 
@@ -533,6 +540,323 @@ impl Drop for Canvas {
             DeleteObject(self.bitmap);
             DeleteDC(self.dc);
             EndPaint(self.hwnd, &self.ps);
+        }
+    }
+}
+
+/// An anti-aliased block over `rect`, as `Canvas::rounded` and `Layer::rounded` draw it.
+unsafe fn rounded(
+    graphics: *mut GpGraphics,
+    rect: &RECT,
+    radius: i32,
+    fill: Option<Color>,
+    ring: Option<Color>,
+) {
+    unsafe {
+        if let Some(color) = fill
+            && let Some(path) = Path::rounded(rect, radius as f32, 0.0)
+        {
+            let mut brush = std::ptr::null_mut();
+            if GdipCreateSolidFill(color.0, &mut brush) == Ok {
+                GdipFillPath(graphics, brush.cast(), path.0);
+                GdipDeleteBrush(brush.cast());
+            }
+        }
+        // The line runs along pixel centers half a pixel in.
+        if let Some(color) = ring
+            && let Some(path) = Path::rounded(rect, radius as f32, 0.5)
+        {
+            let mut pen = std::ptr::null_mut();
+            if GdipCreatePen1(color.0, 1.0, UnitPixel, &mut pen) == Ok {
+                GdipDrawPath(graphics, pen, path.0);
+                GdipDeletePen(pen);
+            }
+        }
+    }
+}
+
+/// `PixelFormat32bppPARGB` of gdipluspixelformats.h, which windows-sys has only in parts.
+const PARGB: i32 = (11 | (32 << 8) | PixelFormatAlpha | PixelFormatGDI | PixelFormatPAlpha) as i32;
+
+/// A 32-bit, top-down DIB section with a memory DC: what a `Layer` draws on.
+struct Dib {
+    dc: HDC,
+    bitmap: HBITMAP,
+    old_bitmap: HGDIOBJ,
+    bits: *mut u8,
+}
+
+impl Dib {
+    fn new(size: SIZE) -> Option<Dib> {
+        unsafe {
+            let mut info: BITMAPINFO = std::mem::zeroed();
+            info.bmiHeader = BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: size.cx,
+                // Negative: the first row in memory is the top one.
+                biHeight: -size.cy,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB,
+                ..std::mem::zeroed()
+            };
+            let mut bits = std::ptr::null_mut();
+            let bitmap = CreateDIBSection(
+                std::ptr::null_mut(),
+                &info,
+                DIB_RGB_COLORS,
+                &mut bits,
+                std::ptr::null_mut(),
+                0,
+            );
+            if bitmap.is_null() || bits.is_null() {
+                return None;
+            }
+            let dc = CreateCompatibleDC(std::ptr::null_mut());
+            let old_bitmap = SelectObject(dc, bitmap);
+            SetBkMode(dc, TRANSPARENT as i32);
+            Some(Dib {
+                dc,
+                bitmap,
+                old_bitmap,
+                bits: bits.cast(),
+            })
+        }
+    }
+}
+
+impl Drop for Dib {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.dc, self.old_bitmap);
+            DeleteObject(self.bitmap);
+            DeleteDC(self.dc);
+        }
+    }
+}
+
+/// The whole picture of a layered window (`WS_EX_LAYERED`), alpha per pixel: what is
+/// left clear shows what is below and lets the mouse through to it, even into another
+/// process. Such a window gets no `WM_PAINT`; draw on a `Layer` kept with the window
+/// and `present` it whenever the picture changes. There is no DWM edge, corner or shadow.
+///
+/// Colors go on premultiplied, so see-through fills and rings land on whatever is below.
+/// Text comes in two kinds: `text` is ClearType, like the rest of the app, but only right
+/// on ground that is opaque where the glyphs fall; `text_gray` is plain anti-aliased and
+/// right on any ground, and stays clean when the part is faded afterwards.
+pub struct Layer {
+    size: SIZE,
+    picture: Dib,
+    /// Where `text_gray` draws its glyphs white on black before they are laid on.
+    ink: Dib,
+    /// Null when GDI+ is not running; blocks are then square.
+    image: *mut GpBitmap,
+    graphics: *mut GpGraphics,
+    /// Alpha under a line of ClearType text, kept from one line to the next.
+    saved: Vec<u8>,
+}
+
+impl Layer {
+    /// All clear, `size` in screen pixels.
+    pub fn new(size: SIZE) -> Option<Layer> {
+        if size.cx <= 0 || size.cy <= 0 {
+            return None;
+        }
+        let (picture, ink) = (Dib::new(size)?, Dib::new(size)?);
+        let (mut image, mut graphics) = (std::ptr::null_mut(), std::ptr::null_mut());
+        unsafe {
+            // GDI+ draws straight into the DIB's memory, premultiplied.
+            if GdipCreateBitmapFromScan0(
+                size.cx,
+                size.cy,
+                size.cx * 4,
+                PARGB,
+                picture.bits,
+                &mut image,
+            ) == Ok
+                && GdipGetImageGraphicsContext(image.cast(), &mut graphics) == Ok
+            {
+                GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias);
+                GdipSetPixelOffsetMode(graphics, PixelOffsetModeHalf);
+            } else {
+                graphics = std::ptr::null_mut();
+            }
+        }
+        let mut layer = Layer {
+            size,
+            picture,
+            ink,
+            image,
+            graphics,
+            saved: Vec::new(),
+        };
+        layer.clear();
+        Some(layer)
+    }
+
+    /// Whether it is `size`, in screen pixels.
+    pub fn fits(&self, size: SIZE) -> bool {
+        (self.size.cx, self.size.cy) == (size.cx, size.cy)
+    }
+
+    fn pixels(&mut self) -> &mut [u8] {
+        let len = (self.size.cx * self.size.cy * 4) as usize;
+        unsafe { std::slice::from_raw_parts_mut(self.picture.bits, len) }
+    }
+
+    fn read(&self, dib: &Dib) -> &[u8] {
+        let len = (self.size.cx * self.size.cy * 4) as usize;
+        unsafe { std::slice::from_raw_parts(dib.bits, len) }
+    }
+
+    /// Lands what GDI+ and GDI still hold, before the other one or the CPU touches the pixels.
+    fn sync(&self) {
+        unsafe {
+            if !self.graphics.is_null() {
+                GdipFlush(self.graphics, FlushIntentionSync);
+            }
+            GdiFlush();
+        }
+    }
+
+    /// `rect` cut to the layer.
+    fn clip(&self, rect: &RECT) -> RECT {
+        RECT {
+            left: rect.left.max(0),
+            top: rect.top.max(0),
+            right: rect.right.min(self.size.cx),
+            bottom: rect.bottom.min(self.size.cy),
+        }
+    }
+
+    /// Byte offsets of the pixels in `rect`, row by row.
+    fn offsets(&self, rect: &RECT) -> impl Iterator<Item = usize> + use<> {
+        let (rect, width) = (self.clip(rect), self.size.cx);
+        (rect.top..rect.bottom)
+            .flat_map(move |y| (rect.left..rect.right).map(move |x| ((y * width + x) * 4) as usize))
+    }
+
+    /// All clear.
+    pub fn clear(&mut self) {
+        self.sync();
+        self.pixels().fill(0);
+    }
+
+    /// As `Canvas::rounded`. Without GDI+ the block is square and the ring left out.
+    pub fn rounded(&mut self, rect: &RECT, radius: i32, fill: Option<Color>, ring: Option<Color>) {
+        if !self.graphics.is_null() {
+            unsafe { rounded(self.graphics, rect, radius, fill, ring) };
+            return;
+        }
+        let Some(color) = fill else { return };
+        let [r, g, b, a] = color.channels();
+        let pre = |c: u8| ((c as u32 * a as u32 + 127) / 255) as u8;
+        let pixel = [pre(b), pre(g), pre(r), a];
+        self.sync();
+        for at in self.offsets(rect) {
+            self.pixels()[at..at + 4].copy_from_slice(&pixel);
+        }
+    }
+
+    /// A line of ClearType `text` in an opaque `color`, centered in `rect`. Where the
+    /// glyphs fall the layer must already be opaque (a solid block); elsewhere the
+    /// colors come out wrong.
+    pub fn text(&mut self, font: &Font, color: Color, text: &str, rect: &RECT) {
+        self.sync();
+        // GDI writes 0 into the alpha of every pixel it draws; ClearType mixes with
+        // the colors below, which are right, so only the alpha has to come back.
+        let mut saved = std::mem::take(&mut self.saved);
+        saved.clear();
+        let offsets = self.offsets(rect);
+        saved.extend(offsets.map(|at| self.read(&self.picture)[at + 3]));
+        unsafe {
+            let old = SelectObject(self.picture.dc, font.handle());
+            SetTextColor(self.picture.dc, color.colorref());
+            draw_text(self.picture.dc, text, self.clip(rect));
+            SelectObject(self.picture.dc, old);
+        }
+        self.sync();
+        for (at, &alpha) in self.offsets(rect).zip(&saved) {
+            self.pixels()[at + 3] = alpha;
+        }
+        self.saved = saved;
+    }
+
+    /// A line of plain anti-aliased `text` in an opaque `color`, centered in `rect`,
+    /// on any ground. The glyphs are those of `text`, only without color fringes.
+    pub fn text_gray(&mut self, font: &Font, color: Color, text: &str, rect: &RECT) {
+        let rect = self.clip(rect);
+        unsafe {
+            fill(self.ink.dc, &rect, 0);
+            let old = SelectObject(self.ink.dc, font.handle());
+            SetTextColor(self.ink.dc, 0xff_ff_ff);
+            draw_text(self.ink.dc, text, rect);
+            SelectObject(self.ink.dc, old);
+        }
+        self.sync();
+        // ClearType white on black leaves how much of each third of a pixel the glyph
+        // covers; their mean is how much of the pixel it covers.
+        let [r, g, b, _] = color.channels();
+        let color = [b as u32, g as u32, r as u32, 255];
+        for at in self.offsets(&rect) {
+            let ink = &self.read(&self.ink)[at..at + 3];
+            let cover = (ink[0] as u32 + ink[1] as u32 + ink[2] as u32 + 1) / 3;
+            if cover == 0 {
+                continue;
+            }
+            let pixel = &mut self.pixels()[at..at + 4];
+            for (channel, top) in pixel.iter_mut().zip(color) {
+                *channel = ((top * cover + *channel as u32 * (255 - cover) + 127) / 255) as u8;
+            }
+        }
+    }
+
+    /// Everything in `rect` at `alpha` (out of 255) of what it was, as CSS `opacity`.
+    pub fn fade(&mut self, rect: &RECT, alpha: u8) {
+        self.sync();
+        for at in self.offsets(rect) {
+            for channel in &mut self.pixels()[at..at + 4] {
+                *channel = ((*channel as u32 * alpha as u32 + 127) / 255) as u8;
+            }
+        }
+    }
+
+    /// Puts the picture up as `hwnd`'s, which must be `WS_EX_LAYERED`, and sizes the
+    /// window to it; where the window is stays with `SetWindowPos`.
+    pub fn present(&self, hwnd: HWND) -> bool {
+        self.sync();
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: 255,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
+        let from = POINT { x: 0, y: 0 };
+        unsafe {
+            UpdateLayeredWindow(
+                hwnd,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                &self.size,
+                self.picture.dc,
+                &from,
+                0,
+                &blend,
+                ULW_ALPHA,
+            ) != 0
+        }
+    }
+}
+
+impl Drop for Layer {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.graphics.is_null() {
+                GdipDeleteGraphics(self.graphics);
+            }
+            if !self.image.is_null() {
+                GdipDisposeImage(self.image.cast());
+            }
         }
     }
 }
@@ -641,5 +965,60 @@ mod tests {
     #[test]
     fn colorref_is_blue_green_red() {
         assert_eq!(Color::rgb(0x12, 0x34, 0x56).colorref(), 0x56_34_12);
+    }
+
+    /// The pixel at `x`, `y` as blue, green, red, alpha, premultiplied.
+    fn pixel(layer: &Layer, x: i32, y: i32) -> [u8; 4] {
+        let at = ((y * layer.size.cx + x) * 4) as usize;
+        let bytes = layer.read(&layer.picture);
+        [bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]
+    }
+
+    #[test]
+    fn layer_leaves_round_corners_and_gaps_clear() {
+        let _gdiplus = GdiPlus::start();
+        let mut layer = Layer::new(SIZE { cx: 40, cy: 20 }).expect("layer");
+        let chip = RECT {
+            left: 2,
+            top: 2,
+            right: 30,
+            bottom: 18,
+        };
+        let fill = Color::rgb(0x29, 0x29, 0x29);
+        layer.rounded(&chip, 6, Some(fill), None);
+        assert_eq!(pixel(&layer, 15, 10), [0x29, 0x29, 0x29, 0xff]);
+        assert_eq!(pixel(&layer, 2, 2)[3], 0, "corner");
+        assert_eq!(pixel(&layer, 35, 10), [0; 4], "gap");
+        // ClearType text gives the alpha it wrote over back.
+        let font = Font::new(FONT, 13);
+        layer.text(&font, Color::rgb(0xc3, 0xc2, 0xb7), "Wg", &chip);
+        for x in 8..24 {
+            assert_eq!(pixel(&layer, x, 10)[3], 0xff, "under text at {x}");
+        }
+        // Faded, every channel goes down alike.
+        layer.fade(&chip, 0x66);
+        assert_eq!(pixel(&layer, 3, 10), [0x10, 0x10, 0x10, 0x66]);
+    }
+
+    #[test]
+    fn gray_text_lands_on_clear_ground() {
+        let _gdiplus = GdiPlus::start();
+        let mut layer = Layer::new(SIZE { cx: 40, cy: 20 }).expect("layer");
+        let font = Font::new(FONT, 16);
+        let all = RECT {
+            left: 0,
+            top: 0,
+            right: 40,
+            bottom: 20,
+        };
+        layer.text_gray(&font, Color::rgb(0xff, 0xff, 0xff), "II", &all);
+        let alphas: Vec<u8> = (0..40).map(|x| pixel(&layer, x, 10)[3]).collect();
+        assert!(alphas.iter().any(|&a| a > 0x80), "{alphas:?}");
+        assert!(alphas.contains(&0), "{alphas:?}");
+        // Premultiplied: no channel above the alpha.
+        for x in 0..40 {
+            let [b, g, r, a] = pixel(&layer, x, 10);
+            assert!(b <= a && g <= a && r <= a);
+        }
     }
 }

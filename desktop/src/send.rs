@@ -1,33 +1,35 @@
-//! Types a command into Claude's prompt box, as if the user had typed it.
+//! Types a phrase into Claude's prompt box, as if the user had typed it.
 //! Everything that touches the system goes through [`Host`], so the steps
 //! can be tested against a fake.
 
 use serde::{Deserialize, Serialize};
 
-/// How a command reaches the prompt box.
+/// How a phrase reaches the prompt box.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
-    /// Submit the command, then put the draft back.
+    /// Submit the phrase, then put the draft back.
     #[default]
     Send,
-    /// Leave `command draft` in the box without submitting.
+    /// Leave `phrase draft` in the box without submitting.
     Fill,
 }
 
+/// What one button types into Claude's prompt box: plain words such as `continue`,
+/// or a Claude slash command with its arguments such as `/compact keep the plan`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Command {
-    /// The command text, fixed arguments included, e.g. `/compact keep the plan`.
+pub struct Phrase {
+    /// The text typed, as is.
     #[serde(rename = "command")]
     pub text: String,
-    /// Button label; the command text when absent.
+    /// Button label; the phrase text when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(default)]
     pub mode: Mode,
 }
 
-impl Command {
+impl Phrase {
     pub fn label(&self) -> &str {
         self.label.as_deref().unwrap_or(&self.text)
     }
@@ -62,7 +64,7 @@ pub trait Host {
     fn submit(&mut self);
 }
 
-pub fn send<H: Host>(host: &mut H, command: &Command) -> Result<(), SendError> {
+pub fn send<H: Host>(host: &mut H, phrase: &Phrase) -> Result<(), SendError> {
     if !host.activate_claude() {
         return Err(SendError::ClaudeNotFound);
     }
@@ -71,15 +73,15 @@ pub fn send<H: Host>(host: &mut H, command: &Command) -> Result<(), SendError> {
     }
     let saved = host.save_clipboard();
     let draft = host.cut_draft();
-    match command.mode {
+    match phrase.mode {
         Mode::Send => {
-            host.paste(&command.text);
+            host.paste(&phrase.text);
             host.submit();
             if !draft.is_empty() {
                 host.paste(&draft);
             }
         }
-        Mode::Fill => host.paste(&format!("{} {}", command.text, draft)),
+        Mode::Fill => host.paste(&format!("{} {}", phrase.text, draft)),
     }
     host.restore_clipboard(saved);
     Ok(())
@@ -160,8 +162,8 @@ mod tests {
         }
     }
 
-    fn command(text: &str, mode: Mode) -> Command {
-        Command {
+    fn phrase(text: &str, mode: Mode) -> Phrase {
+        Phrase {
             text: text.into(),
             label: None,
             mode,
@@ -171,7 +173,7 @@ mod tests {
     #[test]
     fn send_without_draft() {
         let mut host = FakeHost::new("");
-        send(&mut host, &command("/compact", Mode::Send)).unwrap();
+        send(&mut host, &phrase("/compact", Mode::Send)).unwrap();
         assert_eq!(host.submitted, ["/compact"]);
         assert_eq!(host.input, "");
         assert_eq!(host.clipboard, "user's clipboard");
@@ -180,16 +182,16 @@ mod tests {
     #[test]
     fn send_puts_draft_back() {
         let mut host = FakeHost::new("写了一半的话");
-        send(&mut host, &command("/compact", Mode::Send)).unwrap();
+        send(&mut host, &phrase("/compact", Mode::Send)).unwrap();
         assert_eq!(host.submitted, ["/compact"]);
         assert_eq!(host.input, "写了一半的话");
         assert_eq!(host.clipboard, "user's clipboard");
     }
 
     #[test]
-    fn fill_puts_command_before_draft() {
+    fn fill_puts_phrase_before_draft() {
         let mut host = FakeHost::new("keep the plan");
-        send(&mut host, &command("/compact", Mode::Fill)).unwrap();
+        send(&mut host, &phrase("/compact", Mode::Fill)).unwrap();
         assert!(host.submitted.is_empty());
         assert_eq!(host.input, "/compact keep the plan");
         assert_eq!(host.clipboard, "user's clipboard");
@@ -198,7 +200,7 @@ mod tests {
     #[test]
     fn send_with_fixed_arguments() {
         let mut host = FakeHost::new("");
-        send(&mut host, &command("/compact keep the plan", Mode::Send)).unwrap();
+        send(&mut host, &phrase("/compact keep the plan", Mode::Send)).unwrap();
         assert_eq!(host.submitted, ["/compact keep the plan"]);
         assert_eq!(host.clipboard, "user's clipboard");
     }
@@ -207,7 +209,7 @@ mod tests {
     fn claude_not_open() {
         let mut host = FakeHost::new("draft");
         host.claude_open = false;
-        let result = send(&mut host, &command("/compact", Mode::Send));
+        let result = send(&mut host, &phrase("/compact", Mode::Send));
         assert_eq!(result, Err(SendError::ClaudeNotFound));
         assert!(host.submitted.is_empty());
         assert_eq!(host.input, "draft");
@@ -218,7 +220,7 @@ mod tests {
     fn focus_elsewhere_goes_to_the_prompt_first() {
         let mut host = FakeHost::new("写了一半的话");
         host.focused = false;
-        send(&mut host, &command("/compact", Mode::Send)).unwrap();
+        send(&mut host, &phrase("/compact", Mode::Send)).unwrap();
         assert_eq!(host.submitted, ["/compact"]);
         assert_eq!(host.input, "写了一半的话");
         assert_eq!(host.stray_keys, 0);
@@ -230,7 +232,7 @@ mod tests {
         let mut host = FakeHost::new("draft");
         host.prompt_shown = false;
         host.focused = false;
-        let result = send(&mut host, &command("/compact", Mode::Send));
+        let result = send(&mut host, &phrase("/compact", Mode::Send));
         assert_eq!(result, Err(SendError::PromptNotFound));
         assert!(host.submitted.is_empty());
         assert_eq!(host.stray_keys, 0);

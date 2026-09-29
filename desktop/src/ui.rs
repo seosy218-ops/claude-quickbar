@@ -1,15 +1,17 @@
-//! The overlay: a small topmost window with a ⚡ that folds out one button per command.
-//! It never takes focus, so Claude keeps its caret while the user clicks.
+//! The overlay: a small topmost window with a ⚡ that folds out one button per phrase.
+//! Only the buttons show, as chips floating on Claude: the gaps between them are clear
+//! and clicks there land on Claude. It never takes focus, so Claude keeps its caret
+//! while the user clicks.
 //! It rides on Claude's window and shows only while Claude is in front,
 //! driven by system window events rather than polling.
-//! Holding the ⚡ drags the whole bar; holding a command drags it to another place
-//! among the commands, the others making way as it goes.
+//! Holding the ⚡ drags the whole bar; holding a phrase drags it to another place
+//! among the phrases, the others making way as it goes.
 
 use std::cell::RefCell;
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{InvalidateRect, ScreenToClient};
+use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows_sys::Win32::UI::Controls::WM_MOUSELEAVE;
@@ -27,8 +29,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SWP_NOZORDER, SetForegroundWindow, SetTimer, SetWindowPos, ShowWindow, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINEVENT_OUTOFCONTEXT,
     WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CAPTURECHANGED, WM_DESTROY, WM_DPICHANGED, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NULL, WM_PAINT, WM_RBUTTONUP, WM_TIMER,
-    WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WindowFromPoint,
+    WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NULL, WM_RBUTTONUP, WM_TIMER, WNDCLASSW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WindowFromPoint,
 };
 
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -41,8 +43,8 @@ use crate::autostart;
 use crate::config::{Anchor, Config};
 use crate::dialog;
 use crate::menu::{self, Item};
-use crate::paint::{self, Canvas, Color, FONT, Font, GdiPlus, ICON_FONT, Palette, scale};
-use crate::send::{Command, SendError, send};
+use crate::paint::{Color, FONT, Font, GdiPlus, ICON_FONT, Layer, Palette, scale};
+use crate::send::{Phrase, SendError, send};
 use crate::theme::{self, Theme};
 use crate::tray::{self, Tray};
 use crate::win::{
@@ -56,8 +58,8 @@ const SENT_NO_CLAUDE: WPARAM = 1;
 const SENT_NO_PROMPT: WPARAM = 2;
 /// Posted to lay the bar out again once the message that asked for it has returned.
 const WM_RELAYOUT: u32 = WM_APP + 2;
-/// Posted to open the command box once the click that asked for it has returned;
-/// `wparam` is the command's index plus one, or 0 for a new command.
+/// Posted to open the phrase box once the click that asked for it has returned;
+/// `wparam` is the phrase's index plus one, or 0 for a new phrase.
 const WM_ASK: u32 = WM_APP + 3;
 /// Sent by the tray icon; `lparam` is the mouse message.
 const WM_TRAY: u32 = WM_APP + 4;
@@ -76,15 +78,17 @@ const MENU_EDIT: usize = 2;
 const MENU_DELETE: usize = 3;
 const MENU_AUTOSTART: usize = 4;
 
-// Layout in 96-dpi pixels, after Claude's compact secondary buttons.
-/// Around the buttons, the 1px window edge included.
-const PAD: i32 = 4;
-const GAP: i32 = 4;
-const HEIGHT: i32 = 32;
-const CHIP_PAD_X: i32 = 8;
+// Layout in 96-dpi pixels, after the pills above Claude's prompt (Local, the folder):
+// 24 high, 6 in from each side, 6 apart, corners of 6, 13px text, 16px icons.
+// The ⚡ and the + are an icon alone, 6 + 16 + 6 wide, like Claude's folder pill.
+/// Clear room around the buttons, for the shadow under them in the light theme.
+const PAD: i32 = 1;
+const GAP: i32 = 6;
+const CHIP_HEIGHT: i32 = 24;
+const CHIP_PAD_X: i32 = 6;
 const CHIP_RADIUS: i32 = 6;
 const CHIP_SHADOW: i32 = 1;
-const STATUS_PAD_X: i32 = 8;
+/// Between the warning sign and the message in the status chip.
 const STATUS_GAP: i32 = 6;
 const FONT_SIZE: i32 = 13;
 const ICON_SIZE: i32 = 16;
@@ -92,18 +96,18 @@ const ICON_SIZE: i32 = 16;
 const BOLT: &str = "\u{e945}";
 const ADD: &str = "\u{e710}";
 const WARNING: &str = "\u{e7ba}";
-/// How much of a command button shows while a command is being sent (40%).
+/// How much of a phrase button shows while a phrase is being sent (40%).
 const SENDING_ALPHA: u8 = 0x66;
 
 const CONFIG_INVALID: &str = "Config file is invalid";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Button {
-    /// The ⚡, which folds the command buttons out and back in.
+    /// The ⚡, which folds the phrase buttons out and back in.
     Toggle,
-    /// An index into the config's commands.
-    Command(usize),
-    /// The `+` after the commands, which adds one.
+    /// An index into the config's phrases.
+    Phrase(usize),
+    /// The `+` after the phrases, which adds one.
     Add,
 }
 
@@ -140,9 +144,11 @@ struct State {
     claude_lookups: u8,
     /// Taken on the way out, which takes the icon out of the tray.
     tray: Option<Tray>,
+    /// What the window shows, at the window's size; none while it cannot be made.
+    layer: Option<Layer>,
 }
 
-/// A press on the ⚡ or a command that may turn into a drag.
+/// A press on the ⚡ or a phrase that may turn into a drag.
 struct Drag {
     /// Cursor when the button went down, in screen pixels.
     cursor: POINT,
@@ -154,13 +160,13 @@ struct Drag {
 enum Grip {
     /// The ⚡ moves the bar; its position when the button went down, in screen pixels.
     Bar(POINT),
-    /// A command changes places.
-    Command(Reorder),
+    /// A phrase changes places.
+    Phrase(Reorder),
 }
 
-/// A command being dragged along the others.
+/// A phrase being dragged along the others.
 struct Reorder {
-    /// The command's index, and the place among the commands it drops into.
+    /// The phrase's index, and the place among the phrases it drops into.
     from: usize,
     to: usize,
     /// Where the cursor took hold, from the button's left edge, and where that edge is now,
@@ -171,26 +177,26 @@ struct Reorder {
 
 impl Reorder {
     /// Follows the cursor, at `x` in client pixels, along `buttons` as laid out now:
-    /// the button stays among the commands and drops before the first other one whose
+    /// the button stays among the phrases and drops before the first other one whose
     /// middle it has not passed, first or last when past the ends. Returns whether that
     /// place changed.
     fn follow(&mut self, x: i32, buttons: &[(Button, RECT)]) -> bool {
-        let commands = || {
+        let phrases = || {
             buttons
                 .iter()
-                .filter(|(b, _)| matches!(b, Button::Command(_)))
+                .filter(|(b, _)| matches!(b, Button::Phrase(_)))
         };
-        let dragged = Button::Command(self.from);
-        let Some((_, rect)) = commands().find(|&&(b, _)| b == dragged) else {
+        let dragged = Button::Phrase(self.from);
+        let Some((_, rect)) = phrases().find(|&&(b, _)| b == dragged) else {
             return false;
         };
         let width = rect.right - rect.left;
-        let (first, last) = commands().fold((i32::MAX, i32::MIN), |(first, last), (_, r)| {
+        let (first, last) = phrases().fold((i32::MAX, i32::MIN), |(first, last), (_, r)| {
             (first.min(r.left), last.max(r.right))
         });
         let left = x - self.grab;
         let middle = left + width / 2;
-        let to = commands()
+        let to = phrases()
             .filter(|&&(b, r)| b != dragged && (r.left + r.right) / 2 < middle)
             .count();
         self.left = left.min(last - width).max(first);
@@ -205,7 +211,7 @@ thread_local! {
 pub fn run() {
     unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        // Without it the buttons lose their blocks but the bar still works.
+        // Without it the buttons lose their round corners but the bar still works.
         let _gdiplus = GdiPlus::start();
         let instance = GetModuleHandleW(std::ptr::null());
         let class = wide("quickbar");
@@ -217,7 +223,7 @@ pub fn run() {
             ..std::mem::zeroed()
         });
         let hwnd = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             class.as_ptr(),
             class.as_ptr(),
             WS_POPUP,
@@ -234,7 +240,6 @@ pub fn run() {
             return;
         }
         let palette = theme::follow(hwnd, WM_THEME).palette();
-        paint::shape(hwnd, palette.window_border);
         menu::set_theme(palette);
         dialog::set_theme(palette);
         let config = Config::load();
@@ -263,6 +268,7 @@ pub fn run() {
                 // Started at sign-in, Claude may be coming up already.
                 claude_lookups: CLAUDE_LOOKUPS,
                 tray: Some(Tray::new(hwnd, WM_TRAY, palette)),
+                layer: None,
             })
         });
         with_state(State::layout);
@@ -307,32 +313,37 @@ impl State {
         scale(self.hwnd, px)
     }
 
+    /// The window's height: one row of buttons and the pad around it.
+    fn height(&self) -> i32 {
+        self.scale(CHIP_HEIGHT) + 2 * self.scale(PAD)
+    }
+
     /// Sizes the window to fit its buttons, or the status message while one is shown.
     fn layout(&mut self) {
         // The DPI may have changed.
         self.font = bar_font(self.hwnd, FONT, FONT_SIZE);
         self.icon_font = bar_font(self.hwnd, ICON_FONT, ICON_SIZE);
-        let (pad, gap, height) = (self.scale(PAD), self.scale(GAP), self.scale(HEIGHT));
+        let (pad, gap, height) = (self.scale(PAD), self.scale(GAP), self.height());
         let mut x = pad;
         self.buttons.clear();
         if let Some(status) = self.status {
-            x = self.status_parts(status).1.right + self.scale(STATUS_PAD_X);
+            x = self.status_parts(status).0.right;
         } else {
             let mut order: Vec<Button> = Vec::new();
             if self.expanded {
-                let mut commands: Vec<usize> = (0..self.config.commands.len()).collect();
-                // The others make way where the dragged command would drop.
+                let mut phrases: Vec<usize> = (0..self.config.commands.len()).collect();
+                // The others make way where the dragged phrase would drop.
                 if let Some(&Reorder { from, to, .. }) = self.reorder()
-                    && from < commands.len()
-                    && to < commands.len()
+                    && from < phrases.len()
+                    && to < phrases.len()
                 {
-                    let dragged = commands.remove(from);
-                    commands.insert(to, dragged);
+                    let dragged = phrases.remove(from);
+                    phrases.insert(to, dragged);
                 }
-                order.extend(commands.into_iter().map(Button::Command));
+                order.extend(phrases.into_iter().map(Button::Phrase));
                 order.push(Button::Add);
             }
-            // The ⚡ sits on the pinned side, so it stays put as the commands fold out.
+            // The ⚡ sits on the pinned side, so it stays put as the phrases fold out.
             if self.config.position.corner.right() {
                 order.push(Button::Toggle);
             } else {
@@ -340,12 +351,13 @@ impl State {
             }
             for button in order {
                 let width = match button {
-                    Button::Command(i) => {
+                    Button::Phrase(i) => {
                         let label = self.config.commands[i].label();
                         self.font.width(label) + 2 * self.scale(CHIP_PAD_X)
                     }
-                    // Square.
-                    Button::Toggle | Button::Add => height - 2 * pad,
+                    Button::Toggle | Button::Add => {
+                        self.scale(ICON_SIZE) + 2 * self.scale(CHIP_PAD_X)
+                    }
                 };
                 let rect = RECT {
                     left: x,
@@ -363,7 +375,7 @@ impl State {
             cy: height,
         };
         self.place();
-        unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 1) };
+        self.redraw();
         // Buttons moved under a mouse that stayed put.
         self.refresh_hot();
     }
@@ -372,10 +384,10 @@ impl State {
     fn button_face(&self, button: Button) -> (&Font, &str, Color) {
         match button {
             Button::Toggle => (&self.icon_font, BOLT, self.palette.text_secondary),
-            Button::Command(i) => (
+            Button::Phrase(i) => (
                 &self.font,
                 self.config.commands[i].label(),
-                self.palette.text,
+                self.palette.text_secondary,
             ),
             Button::Add => (&self.icon_font, ADD, self.palette.text_secondary),
         }
@@ -396,7 +408,7 @@ impl State {
         };
         if hot != self.hot {
             self.hot = hot;
-            unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0) };
+            self.redraw();
         }
     }
 
@@ -487,7 +499,7 @@ impl State {
     }
 
     /// Once the cursor has gone far enough to count as a drag, moves the bar with it,
-    /// or the held command along the others.
+    /// or the held phrase along the others.
     fn drag_with_cursor(&mut self) {
         let Some(drag) = &mut self.drag else { return };
         let mut at = POINT { x: 0, y: 0 };
@@ -504,7 +516,7 @@ impl State {
         let mut relayout = false;
         match &mut drag.grip {
             Grip::Bar(origin) => {
-                // The held command shows as held while it moves; the ⚡ does not.
+                // The held phrase shows as held while it moves; the ⚡ does not.
                 self.pressed = None;
                 unsafe {
                     SetWindowPos(
@@ -518,7 +530,7 @@ impl State {
                     )
                 };
             }
-            Grip::Command(reorder) => {
+            Grip::Phrase(reorder) => {
                 unsafe { ScreenToClient(self.hwnd, &mut at) };
                 relayout = reorder.follow(at.x, &self.buttons);
             }
@@ -526,14 +538,14 @@ impl State {
         if relayout {
             self.layout();
         }
-        unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0) };
+        self.redraw();
     }
 
-    /// The command being dragged to another place, once the cursor has gone far enough.
+    /// The phrase being dragged to another place, once the cursor has gone far enough.
     fn reorder(&self) -> Option<&Reorder> {
         match &self.drag {
             Some(Drag {
-                grip: Grip::Command(reorder),
+                grip: Grip::Phrase(reorder),
                 moved: true,
                 ..
             }) => Some(reorder),
@@ -553,40 +565,40 @@ impl State {
         self.save("Position not saved");
     }
 
-    /// Puts `command` at `index`, or after the others when `index` is `None`.
-    /// Does nothing when there is no longer a command at `index`.
-    fn set_command(&mut self, index: Option<usize>, command: Command) {
+    /// Puts `phrase` at `index`, or after the others when `index` is `None`.
+    /// Does nothing when there is no longer a phrase at `index`.
+    fn set_phrase(&mut self, index: Option<usize>, phrase: Phrase) {
         match index {
             Some(i) => match self.config.commands.get_mut(i) {
-                Some(old) => *old = command,
+                Some(old) => *old = phrase,
                 None => return,
             },
-            None => self.config.commands.push(command),
+            None => self.config.commands.push(phrase),
         }
         self.layout();
-        self.save("Commands not saved");
+        self.save("Phrases not saved");
     }
 
-    fn delete_command(&mut self, i: usize) {
+    fn delete_phrase(&mut self, i: usize) {
         if i < self.config.commands.len() {
             self.config.commands.remove(i);
             self.layout();
-            self.save("Commands not saved");
+            self.save("Phrases not saved");
         }
     }
 
-    /// Puts command `from` at place `to` among the commands, where it was dropped.
-    fn move_command(&mut self, from: usize, to: usize) {
+    /// Puts phrase `from` at place `to` among the phrases, where it was dropped.
+    fn move_phrase(&mut self, from: usize, to: usize) {
         let count = self.config.commands.len();
         let moves = from != to && from < count && to < count;
         if moves {
-            let command = self.config.commands.remove(from);
-            self.config.commands.insert(to, command);
+            let phrase = self.config.commands.remove(from);
+            self.config.commands.insert(to, phrase);
         }
         // The buttons were laid out for the drag.
         self.layout();
         if moves {
-            self.save("Commands not saved");
+            self.save("Phrases not saved");
         }
     }
 
@@ -599,7 +611,7 @@ impl State {
     }
 
     /// The press was cut short (Alt+Tab, another window took the mouse): put the bar
-    /// or the commands back.
+    /// or the phrases back.
     fn cancel_drag(&mut self) {
         let drag = self.drag.take();
         self.pressed = None;
@@ -610,23 +622,24 @@ impl State {
                 ..
             }) => self.place(),
             Some(Drag {
-                grip: Grip::Command(_),
+                grip: Grip::Phrase(_),
                 moved: true,
                 ..
             }) => self.layout(),
             _ => {}
         }
-        unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0) };
+        self.redraw();
     }
 
-    /// Where the warning sign and the message of `status` go: no button around them.
-    fn status_parts(&self, status: &str) -> (RECT, RECT) {
-        let left = self.scale(PAD) + self.scale(STATUS_PAD_X);
-        let (top, bottom) = (0, self.scale(HEIGHT));
+    /// The status chip, and where its warning sign and message go inside it.
+    fn status_parts(&self, status: &str) -> (RECT, RECT, RECT) {
+        let (pad, pad_x) = (self.scale(PAD), self.scale(CHIP_PAD_X));
+        let (top, bottom) = (pad, self.height() - pad);
+        let icon_left = pad + pad_x;
         let icon = RECT {
-            left,
+            left: icon_left,
             top,
-            right: left + self.scale(ICON_SIZE),
+            right: icon_left + self.scale(ICON_SIZE),
             bottom,
         };
         let text_left = icon.right + self.scale(STATUS_GAP);
@@ -636,26 +649,61 @@ impl State {
             right: text_left + self.font.width(status),
             bottom,
         };
-        (icon, text)
+        let chip = RECT {
+            left: pad,
+            top,
+            right: text.right + pad_x,
+            bottom,
+        };
+        (chip, icon, text)
     }
 
-    fn paint(&self) {
-        let canvas = Canvas::begin(self.hwnd);
+    /// Draws the bar afresh and puts it up. A layered window gets no `WM_PAINT`,
+    /// so whatever changes its look calls this.
+    fn redraw(&mut self) {
+        let mut layer = match self.layer.take() {
+            Some(layer) if layer.fits(self.size) => layer,
+            _ => match Layer::new(self.size) {
+                Some(layer) => layer,
+                None => return,
+            },
+        };
+        layer.clear();
+        self.draw(&mut layer);
+        layer.present(self.hwnd);
+        self.layer = Some(layer);
+    }
+
+    /// One chip's block: its shadow, its fill and its ring.
+    fn chip(&self, layer: &mut Layer, rect: &RECT, fill: Color) {
         let palette = self.palette;
-        let bounds = canvas.bounds();
-        canvas.fill(&bounds, palette.surface);
+        let radius = self.scale(CHIP_RADIUS);
+        if let Some(color) = palette.pill_shadow {
+            let shadow = self.scale(CHIP_SHADOW);
+            let below = RECT {
+                top: rect.top + shadow,
+                bottom: rect.bottom + shadow,
+                ..*rect
+            };
+            layer.rounded(&below, radius, Some(color), None);
+        }
+        layer.rounded(rect, radius, Some(fill), palette.pill_ring);
+    }
+
+    fn draw(&self, layer: &mut Layer) {
+        let palette = self.palette;
         if let Some(status) = self.status {
-            let (icon, text) = self.status_parts(status);
-            canvas.text(&self.icon_font, palette.text_warning, WARNING, &icon);
-            canvas.text(&self.font, palette.text_warning, status, &text);
+            let (chip, icon, text) = self.status_parts(status);
+            self.chip(layer, &chip, palette.pill);
+            layer.text(&self.icon_font, palette.text_warning, WARNING, &icon);
+            layer.text(&self.font, palette.text_warning, status, &text);
             return;
         }
-        let (radius, shadow) = (self.scale(CHIP_RADIUS), self.scale(CHIP_SHADOW));
         // Clicks do nothing while sending or dragging, so nothing lights up.
         let still = !self.sending && self.drag.is_none();
-        // The dragged command sits where the cursor has it, over the others.
+        // The dragged phrase sits where the cursor has it, over the others.
         let floating = self.reorder().and_then(|reorder| {
-            let button = Button::Command(reorder.from);
+            let button = Button::Phrase(reorder.from);
             let rect = self.rect_of(button)?;
             let left = reorder.left;
             let right = left + rect.right - rect.left;
@@ -673,34 +721,28 @@ impl State {
             .filter(|&(b, _)| floating.is_none_or(|(f, _)| f != b))
             .chain(floating);
         for (button, ref rect) in buttons {
-            let chip = if self.pressed == Some(button) {
-                palette.chip_down
-            } else if still && self.hot == Some(button) {
-                palette.chip_hover
+            // Held down looks as under the mouse, as in Claude.
+            let lit = self.pressed == Some(button) || (still && self.hot == Some(button));
+            let fill = if lit {
+                palette.pill_hover
             } else {
-                palette.chip
+                palette.pill
             };
-            // While sending, command buttons show as a whole at 40%, like Claude's disabled ones.
-            let faded = self.sending && matches!(button, Button::Command(_));
-            let fade = |color: Color| {
-                if faded {
-                    color.faded(SENDING_ALPHA)
-                } else {
-                    color
-                }
-            };
-            if let Some(color) = palette.chip_shadow {
-                let below = RECT {
-                    top: rect.top + shadow,
-                    bottom: rect.bottom + shadow,
+            self.chip(layer, rect, fill);
+            let (font, label, color) = self.button_face(button);
+            // While sending, phrase buttons show as a whole at 40%, like Claude's disabled
+            // ones. ClearType's color fringes would show through on what is below, so
+            // their text is plain anti-aliased.
+            if self.sending && matches!(button, Button::Phrase(_)) {
+                layer.text_gray(font, color, label, rect);
+                let with_shadow = RECT {
+                    bottom: rect.bottom + self.scale(CHIP_SHADOW),
                     ..*rect
                 };
-                canvas.rounded(&below, radius, Some(fade(color)), None);
+                layer.fade(&with_shadow, SENDING_ALPHA);
+            } else {
+                layer.text(font, color, label, rect);
             }
-            let fill = fade(chip).over(palette.surface);
-            canvas.rounded(rect, radius, Some(fill), palette.chip_ring.map(fade));
-            let (font, label, color) = self.button_face(button);
-            canvas.text(font, fade(color).over(palette.surface), label, rect);
         }
     }
 
@@ -725,10 +767,10 @@ impl State {
 
     fn start_send(&mut self, i: usize) {
         self.sending = true;
-        let command = self.config.commands[i].clone();
+        let phrase = self.config.commands[i].clone();
         let hwnd = self.hwnd as usize;
         std::thread::spawn(move || {
-            let result = send(&mut WinHost::new(hwnd as HWND), &command);
+            let result = send(&mut WinHost::new(hwnd as HWND), &phrase);
             let outcome = match result {
                 Ok(()) => SENT,
                 Err(SendError::ClaudeNotFound) => SENT_NO_CLAUDE,
@@ -750,16 +792,15 @@ impl State {
         }
     }
 
-    /// Claude went light or dark: the bar, its edge and the tray icon follow.
+    /// Claude went light or dark: the bar and the tray icon follow.
     fn set_theme(&mut self, theme: Theme) {
         self.palette = theme.palette();
-        paint::shape(self.hwnd, self.palette.window_border);
         menu::set_theme(self.palette);
         dialog::set_theme(self.palette);
         if let Some(tray) = &mut self.tray {
             tray.repaint(self.palette);
         }
-        unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0) };
+        self.redraw();
     }
 
     fn show_status(&mut self, status: &'static str) {
@@ -866,10 +907,6 @@ unsafe extern "system" fn window_proc(
     unsafe {
         match msg {
             WM_MOUSEACTIVATE => return MA_NOACTIVATE as LRESULT,
-            WM_PAINT => {
-                with_state(|s| s.paint());
-                return 0;
-            }
             WM_LBUTTONDOWN => {
                 with_state(|s| {
                     let Some(button) = s.button_at(lparam).filter(|_| !s.sending) else {
@@ -882,8 +919,8 @@ unsafe extern "system" fn window_proc(
                                 y: bar.top,
                             })
                         }),
-                        Button::Command(from) => s.rect_of(button).map(|rect| {
-                            Grip::Command(Reorder {
+                        Button::Phrase(from) => s.rect_of(button).map(|rect| {
+                            Grip::Phrase(Reorder {
                                 from,
                                 to: from,
                                 grab: point_of(lparam).x - rect.left,
@@ -901,7 +938,7 @@ unsafe extern "system" fn window_proc(
                         moved: false,
                     });
                     SetCapture(hwnd);
-                    InvalidateRect(hwnd, std::ptr::null(), 0);
+                    s.redraw();
                 });
                 return 0;
             }
@@ -937,7 +974,7 @@ unsafe extern "system" fn window_proc(
                     {
                         match grip {
                             Grip::Bar(_) => s.pin(),
-                            Grip::Command(Reorder { from, to, .. }) => s.move_command(from, to),
+                            Grip::Phrase(Reorder { from, to, .. }) => s.move_phrase(from, to),
                         }
                     } else if let Some(button) = pressed
                         && s.button_at(lparam) == Some(button)
@@ -947,7 +984,7 @@ unsafe extern "system" fn window_proc(
                                 s.expanded = !s.expanded;
                                 s.layout();
                             }
-                            Button::Command(i) => s.start_send(i),
+                            Button::Phrase(i) => s.start_send(i),
                             Button::Add => {
                                 PostMessageW(hwnd, WM_ASK, 0, 0);
                             }
@@ -955,7 +992,7 @@ unsafe extern "system" fn window_proc(
                     }
                     // The press is over: take its look away and let hover show again.
                     s.refresh_hot();
-                    InvalidateRect(hwnd, std::ptr::null(), 0);
+                    s.redraw();
                 });
                 return 0;
             }
@@ -971,7 +1008,7 @@ unsafe extern "system" fn window_proc(
                         SENT_NO_PROMPT => s.show_status("No prompt box to type in"),
                         _ => {}
                     }
-                    InvalidateRect(hwnd, std::ptr::null(), 0);
+                    s.redraw();
                 });
                 return 0;
             }
@@ -993,11 +1030,11 @@ unsafe extern "system" fn window_proc(
                 return 0;
             }
             WM_RBUTTONUP => {
-                let command = with_state(|s| match s.button_at(lparam) {
-                    Some(Button::Command(i)) => Some(i),
+                let phrase = with_state(|s| match s.button_at(lparam) {
+                    Some(Button::Phrase(i)) => Some(i),
                     _ => None,
                 });
-                bar_menu(hwnd, command.flatten());
+                bar_menu(hwnd, phrase.flatten());
                 return 0;
             }
             WM_TRAY => {
@@ -1039,10 +1076,10 @@ unsafe extern "system" fn window_proc(
     }
 }
 
-/// The bar's right-click menu; on a command button, `command` is that command's index.
-fn bar_menu(hwnd: HWND, command: Option<usize>) {
+/// The bar's right-click menu; on a phrase button, `phrase` is that phrase's index.
+fn bar_menu(hwnd: HWND, phrase: Option<usize>) {
     let mut items = Vec::new();
-    if command.is_some() {
+    if phrase.is_some() {
         items.extend([
             Item::entry(MENU_EDIT, "Edit"),
             Item::entry(MENU_DELETE, "Delete").danger(),
@@ -1052,7 +1089,7 @@ fn bar_menu(hwnd: HWND, command: Option<usize>) {
     items.push(Item::entry(MENU_QUIT, "Quit"));
     let mut at = POINT { x: 0, y: 0 };
     unsafe { GetCursorPos(&mut at) };
-    match (menu::pick(hwnd, at, &items), command) {
+    match (menu::pick(hwnd, at, &items), phrase) {
         (Some(MENU_QUIT), _) => unsafe {
             DestroyWindow(hwnd);
         },
@@ -1061,7 +1098,7 @@ fn bar_menu(hwnd: HWND, command: Option<usize>) {
             PostMessageW(hwnd, WM_ASK, i + 1, 0);
         },
         (Some(MENU_DELETE), Some(i)) => {
-            with_state(|s| s.delete_command(i));
+            with_state(|s| s.delete_phrase(i));
             give_back_focus();
         }
         // Closed without a pick: the foreground stays wherever the user went meanwhile.
@@ -1126,7 +1163,7 @@ fn bar_font(hwnd: HWND, face: &str, size: i32) -> Font {
     Font::new(face, scale(hwnd, size))
 }
 
-/// Opens the command box for command `index`, or for a new one when `None`,
+/// Opens the phrase box for phrase `index`, or for a new one when `None`,
 /// and applies the answer. Runs outside the state: the box has its own message loop.
 fn ask(hwnd: HWND, index: Option<usize>) {
     // A second click queued up before the first box disabled the bar.
@@ -1134,16 +1171,16 @@ fn ask(hwnd: HWND, index: Option<usize>) {
         return;
     }
     let initial = match index {
-        // Gone when the command went away before the box opened.
+        // Gone when the phrase went away before the box opened.
         Some(i) => match with_state(|s| s.config.commands.get(i).cloned()).flatten() {
-            Some(command) => Some(command),
+            Some(phrase) => Some(phrase),
             None => return,
         },
         None => None,
     };
     let answer = dialog::ask(hwnd, initial.as_ref());
-    if let Some(command) = answer {
-        with_state(|s| s.set_command(index, command));
+    if let Some(phrase) = answer {
+        with_state(|s| s.set_phrase(index, phrase));
     }
     give_back_focus();
 }

@@ -1,4 +1,4 @@
-//! The right-click menu of the bar and of the command box's fields, drawn after
+//! The right-click menu of the bar and of the phrase box's fields, drawn after
 //! Claude's menus. Works like `TrackPopupMenu` with `TPM_RETURNCMD`: `pick` opens it
 //! and returns once it is closed, with what was picked.
 
@@ -599,7 +599,7 @@ mod tests {
 
     #[test]
     fn menu_is_as_tall_as_claude_s() {
-        // The bar's menu on a command: Edit / Delete / line / Quit.
+        // The bar's menu on a phrase: Edit / Delete / line / Quit.
         let items = [
             Item::entry(1, "Edit"),
             Item::entry(2, "Delete").danger(),

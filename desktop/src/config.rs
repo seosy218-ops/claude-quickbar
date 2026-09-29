@@ -5,15 +5,15 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::send::{Command, Mode};
+use crate::send::{Mode, Phrase};
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// Where the bar sits on Claude's window.
     pub position: Anchor,
-    /// The buttons, in order.
-    pub commands: Vec<Command>,
+    /// The buttons' phrases, in order. Named after the file's `commands` field.
+    pub commands: Vec<Phrase>,
     /// The file on disk could not be read; saving would overwrite whatever the user wrote there.
     #[serde(skip)]
     unreadable: bool,
@@ -21,14 +21,14 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        let command = |text: &str| Command {
+        let phrase = |text: &str| Phrase {
             text: text.into(),
             label: None,
             mode: Mode::Send,
         };
         Config {
             position: Anchor::default(),
-            commands: vec![command("/compact"), command("/clear")],
+            commands: vec![phrase("/compact"), phrase("/clear"), phrase("continue")],
             unreadable: false,
         }
     }
@@ -143,7 +143,7 @@ impl Config {
         }
     }
 
-    /// Writes the defaults out when there is no file, and adds the command list
+    /// Writes the defaults out when there is no file, and adds the phrase list
     /// when the file has none, so the user has something to edit.
     fn load_from(path: &Path) -> Config {
         let json = match std::fs::read(path) {
@@ -272,7 +272,7 @@ mod tests {
         let config = Config::load_from(&dir.file());
         assert_eq!(config, Config::default());
         let texts: Vec<_> = config.commands.iter().map(|c| c.text.as_str()).collect();
-        assert_eq!(texts, ["/compact", "/clear"]);
+        assert_eq!(texts, ["/compact", "/clear", "continue"]);
         assert!(config.commands.iter().all(|c| c.mode == Mode::Send));
         assert!(dir.file().exists());
         assert_eq!(Config::load_from(&dir.file()), Config::default());
@@ -284,7 +284,7 @@ mod tests {
         let mut config = Config::default();
         config.position.x = 42;
         config.commands[1].label = Some("Clear".into());
-        config.commands.push(Command {
+        config.commands.push(Phrase {
             text: "/compact keep the plan".into(),
             label: None,
             mode: Mode::Fill,

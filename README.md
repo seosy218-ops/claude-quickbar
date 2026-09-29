@@ -1,10 +1,8 @@
 # quickbar
 
-A small floating bar for the Claude desktop app on Windows: one click types a command such as `/compact` into the Code session in front of you, as if you had typed it yourself.
+A small floating bar for the Claude desktop app on Windows that types the phrases you use often into the Code session in front of you, one click each, as if you had typed them yourself: plain words such as `continue`, a slash command such as `/compact`, or a `/skill` followed by a sentence of what you want.
 
-![The bar folded out: /clear, yes, /compact and +](assets/expanded.png)
-
-![The bar folded in: only the ⚡](assets/collapsed.png)
+![The bar folded out beside Claude's Local and folder chips: /clear, yes, /compact, /wait-what and +](assets/expanded.png)
 
 > [!IMPORTANT]
 > **Unofficial.** quickbar is a third-party tool, not made, endorsed or supported by Anthropic. It works by finding Claude's prompt box on screen and typing into it, so an update to the Claude app may break it at any time.
@@ -30,15 +28,15 @@ The exe lands in `desktop/target/release/quickbar.exe`.
 
 ## Use
 
-- **⚡** folds the command buttons out and back in.
-- **Click a command** to send it to Claude's Code prompt box. Whatever you had half-typed there is put back afterwards, and your clipboard is left as it was (the command does not show up in Win+V history either).
-- **`+`** adds a command. Each command has the text to type (fixed arguments included, e.g. `/compact keep the plan`), an optional label for the button, and a switch **"Fill in only, don't send"** that leaves the command in the box, ahead of your draft, for you to finish and send.
-- **Right-click a command** to edit or delete it. Right-clicking anywhere on the bar also offers **Quit**.
-- **Drag a command** to move it among the others.
+- **⚡** folds the phrase buttons out and back in.
+- **Click a phrase** to send it to Claude's Code prompt box. Whatever you had half-typed there is put back afterwards, and your clipboard is left as it was (the phrase does not show up in Win+V history either).
+- **`+`** adds a phrase. Each phrase has the text to type (anything you would type yourself, e.g. `continue` or `/compact keep the plan`), an optional label for the button, and a switch **"Fill in only, don't send"** that leaves the phrase in the box, ahead of your draft, for you to finish and send.
+- **Right-click a phrase** to edit or delete it. Right-clicking any button, ⚡ and + included, also offers **Quit**. The gaps between buttons are see-through: a click there lands on Claude.
+- **Drag a phrase** to move it among the others.
 - **Drag the ⚡** to move the bar. It stays at that spot relative to the nearest corner of Claude's window, so it follows Claude when Claude is moved or resized.
 - **Tray icon** (a ⚡ in the notification area): **Start with Windows** and **Quit**. Start with Windows starts this very exe at sign-in, so move the exe first, then tick it.
 
-![The box for adding or editing a command: the command, an optional label, and the fill-in-only switch](assets/add-command.png)
+![The box for adding or editing a phrase: the phrase, an optional label, and the fill-in-only switch](assets/add-command.png)
 
 The bar follows Claude's light or dark theme, and hides while Claude is minimized or behind other windows.
 
@@ -59,6 +57,10 @@ Everything the bar does is saved in `%APPDATA%\quickbar\config.json`, written th
       "mode": "send"
     },
     {
+      "command": "continue",
+      "mode": "send"
+    },
+    {
       "command": "/review",
       "label": "Review",
       "mode": "fill"
@@ -71,11 +73,11 @@ Everything the bar does is saved in `%APPDATA%\quickbar\config.json`, written th
 |---|---|---|
 | `position.corner` | The corner of Claude's window the bar keeps its distance from: `top_left`, `top_right`, `bottom_left` or `bottom_right`. | `top_right` |
 | `position.x`, `position.y` | From that corner of Claude's window to the same corner of the bar, in pixels at 100% scaling. Negative is left or up. | `-160`, `4`: in Claude's title bar, left of the window buttons |
-| `commands[].command` | The text typed into the prompt box. Required. | — |
-| `commands[].label` | The button's text. | The command text |
-| `commands[].mode` | `send` submits the command; `fill` leaves it in the box without submitting. | `send` |
+| `commands[].command` | The phrase: the text typed into the prompt box, exactly as you would type it (plain words or a slash command). Required. | — |
+| `commands[].label` | The button's text. | The phrase text |
+| `commands[].mode` | `send` submits the phrase; `fill` leaves it in the box without submitting. | `send` |
 
-With no `commands` at all, the bar starts with `/compact` and `/clear`.
+Each entry of `commands` is one phrase; the names `commands` and `command` stay as they are so older files keep working. With no `commands` at all, the bar starts with `/compact`, `/clear` and `continue`.
 
 Field names only ever get added, never renamed or removed, so a config file written for an older version keeps working. If the file cannot be read, the bar says **"Config file is invalid"**, runs with the defaults, and leaves your file untouched until you fix it.
 

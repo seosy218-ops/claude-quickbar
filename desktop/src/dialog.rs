@@ -1,5 +1,5 @@
-//! The small box for adding or changing a command: the command, an optional
-//! label, and send or fill. OK stays greyed out while the command is empty.
+//! The small box for adding or changing a phrase: the phrase, an optional
+//! label, and send or fill. OK stays greyed out while the phrase is empty.
 //! Drawn after Claude's dialogs. The two fields are system EDITs in frames drawn
 //! here; the switch and the buttons are drawn and worked here, as on the bar.
 
@@ -35,10 +35,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use crate::menu::{self, Item};
 use crate::paint::{self, Align, Brush, Canvas, Color, FONT, FONT_SEMIBOLD, Font, Palette, scale};
-use crate::send::{Command, Mode};
+use crate::send::{Mode, Phrase};
 use crate::win::{clipboard_has_text, is_ours, point_of, wide, window_rect, work_area};
 
-const COMMAND: i32 = 100;
+const PHRASE: i32 = 100;
 const LABEL: i32 = 101;
 
 // The fields' right-click menu.
@@ -85,13 +85,13 @@ const KNOB_COLOR: Color = Color::rgb(0xff, 0xff, 0xff);
 const KNOB_SHADOW: Color = Color::rgba(0, 0, 0, 0x1a);
 
 const FILL_TEXT: &str = "Fill in only, don't send";
-const COMMAND_HINT: &str = "/compact keep the plan";
+const PHRASE_HINT: &str = "Keep going, then run the tests";
 const LABEL_HINT: &str = "Shown on the button";
 
 /// What in the box can be clicked or take the focus, in Tab order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Part {
-    Command,
+    Phrase,
     Label,
     Switch,
     Cancel,
@@ -99,7 +99,7 @@ enum Part {
 }
 
 const PARTS: [Part; 5] = [
-    Part::Command,
+    Part::Phrase,
     Part::Label,
     Part::Switch,
     Part::Cancel,
@@ -110,7 +110,7 @@ const PARTS: [Part; 5] = [
 struct Layout {
     size: SIZE,
     title: RECT,
-    /// The fields' names and their frames: the command's, then the label's.
+    /// The fields' names and their frames: the phrase's, then the label's.
     captions: [RECT; 2],
     fields: [RECT; 2],
     /// The switch's row, all of which toggles it, and the switch itself.
@@ -131,7 +131,7 @@ struct Fonts {
 /// The box while it is open, and how it was closed.
 struct Dialog {
     hwnd: HWND,
-    command: HWND,
+    phrase: HWND,
     label: HWND,
     title: &'static str,
     fonts: Fonts,
@@ -140,7 +140,7 @@ struct Dialog {
     field_brush: Brush,
     /// Fill in only rather than send.
     fill: bool,
-    /// OK can be used: there is a command.
+    /// OK can be used: there is a phrase.
     can_ok: bool,
     /// Where the keys go. Ringed on the fields always, on the switch and the buttons
     /// only while `keys`, as browsers do.
@@ -158,7 +158,7 @@ struct Dialog {
 enum Status {
     Open,
     Cancelled,
-    Done(Command),
+    Done(Phrase),
 }
 
 thread_local! {
@@ -174,19 +174,19 @@ pub fn set_theme(palette: &'static Palette) {
     with_dialog(|d| {
         d.field_brush = Brush::new(field_color(palette));
         paint::shape(d.hwnd, palette.window_border);
-        for hwnd in [d.hwnd, d.command, d.label] {
+        for hwnd in [d.hwnd, d.phrase, d.label] {
             unsafe { InvalidateRect(hwnd, std::ptr::null(), 1) };
         }
     });
 }
 
-/// Asks for a command, filled in with `initial` when changing one.
+/// Asks for a phrase, filled in with `initial` when changing one.
 /// Blocks until the box is closed; `None` when the user cancels.
 /// `owner` is disabled meanwhile.
-pub fn ask(owner: HWND, initial: Option<&Command>) -> Option<Command> {
+pub fn ask(owner: HWND, initial: Option<&Phrase>) -> Option<Phrase> {
     unsafe {
         let instance = GetModuleHandleW(std::ptr::null());
-        let class = wide("quickbar-command");
+        let class = wide("quickbar-phrase");
         // Fails harmlessly when already registered by an earlier box.
         RegisterClassW(&WNDCLASSW {
             lpfnWndProc: Some(dialog_proc),
@@ -196,9 +196,9 @@ pub fn ask(owner: HWND, initial: Option<&Command>) -> Option<Command> {
             ..std::mem::zeroed()
         });
         let title = if initial.is_some() {
-            "Edit command"
+            "Edit phrase"
         } else {
-            "Add command"
+            "Add phrase"
         };
         let mut cursor = POINT { x: 0, y: 0 };
         GetCursorPos(&mut cursor);
@@ -237,7 +237,7 @@ pub fn ask(owner: HWND, initial: Option<&Command>) -> Option<Command> {
                 std::ptr::null(),
             )
         };
-        let command = field(COMMAND, initial.map_or("", |c| c.text.as_str()));
+        let phrase = field(PHRASE, initial.map_or("", |c| c.text.as_str()));
         let label = field(
             LABEL,
             initial.and_then(|c| c.label.as_deref()).unwrap_or(""),
@@ -248,7 +248,7 @@ pub fn ask(owner: HWND, initial: Option<&Command>) -> Option<Command> {
         let size = layout.size;
         DIALOG.set(Some(Dialog {
             hwnd,
-            command,
+            phrase,
             label,
             title,
             fonts,
@@ -256,14 +256,14 @@ pub fn ask(owner: HWND, initial: Option<&Command>) -> Option<Command> {
             field_brush: Brush::new(field_color(palette)),
             fill: initial.is_some_and(|c| c.mode == Mode::Fill),
             can_ok: false,
-            focus: Part::Command,
+            focus: Part::Phrase,
             keys: false,
             active: false,
             hot: None,
             pressed: None,
             status: Status::Open,
         }));
-        own_field(command);
+        own_field(phrase);
         own_field(label);
         fit_fields();
         update_ok();
@@ -282,7 +282,7 @@ pub fn ask(owner: HWND, initial: Option<&Command>) -> Option<Command> {
         ShowWindow(hwnd, SW_SHOW);
         // The user types here, so this one does take the foreground.
         SetForegroundWindow(hwnd);
-        move_focus(Part::Command);
+        move_focus(Part::Phrase);
 
         let mut msg: MSG = std::mem::zeroed();
         while is_open() {
@@ -311,7 +311,7 @@ pub fn ask(owner: HWND, initial: Option<&Command>) -> Option<Command> {
         EnableWindow(owner, 1);
         DestroyWindow(hwnd);
         match status {
-            Some(Status::Done(command)) => Some(command),
+            Some(Status::Done(phrase)) => Some(phrase),
             _ => None,
         }
     }
@@ -372,8 +372,8 @@ impl Layout {
             rect
         };
         let title = row(s(TITLE), s(TITLE_GAP));
-        let command_caption = row(s(CAPTION), s(CAPTION_GAP));
-        let command = row(s(CONTROL), s(GAP));
+        let phrase_caption = row(s(CAPTION), s(CAPTION_GAP));
+        let phrase = row(s(CONTROL), s(GAP));
         let label_caption = row(s(CAPTION), s(CAPTION_GAP));
         let label = row(s(CONTROL), s(GAP));
         let switch_row = row(s(SWITCH_ROW), s(GAP));
@@ -389,8 +389,8 @@ impl Layout {
                 cy: y,
             },
             title,
-            captions: [command_caption, label_caption],
-            fields: [command, label],
+            captions: [phrase_caption, label_caption],
+            fields: [phrase, label],
             switch_row,
             switch: RECT {
                 left: right - s(SWITCH_WIDTH),
@@ -410,7 +410,7 @@ impl Layout {
     /// The part at `at`, whether or not it can be used now.
     fn part_at(&self, POINT { x, y }: POINT) -> Option<Part> {
         [
-            (Part::Command, &self.fields[0]),
+            (Part::Phrase, &self.fields[0]),
             (Part::Label, &self.fields[1]),
             (Part::Switch, &self.switch_row),
             (Part::Cancel, &self.cancel),
@@ -446,7 +446,7 @@ impl Fonts {
 fn fit_fields() {
     let Some((hwnd, fields, frames, font, line)) = with_dialog(|d| {
         let font = &d.fonts.text;
-        let fields = [d.command, d.label];
+        let fields = [d.phrase, d.label];
         (
             d.hwnd,
             fields,
@@ -562,23 +562,23 @@ fn act(part: Part) {
         }
         Part::Cancel => close(Status::Cancelled),
         Part::Ok => press_ok(),
-        Part::Command | Part::Label => {}
+        Part::Phrase | Part::Label => {}
     }
 }
 
-/// OK, unless there is no command yet.
+/// OK, unless there is no phrase yet.
 fn press_ok() {
-    if let Some(command) = read() {
-        close(Status::Done(command));
+    if let Some(phrase) = read() {
+        close(Status::Done(phrase));
     }
 }
 
-/// OK is available only while there is a command.
+/// OK is available only while there is a phrase.
 fn update_ok() {
-    let Some(command) = with_dialog(|d| d.command) else {
+    let Some(phrase) = with_dialog(|d| d.phrase) else {
         return;
     };
-    let ok = !text_of(command).trim().is_empty();
+    let ok = !text_of(phrase).trim().is_empty();
     let changed = with_dialog(|d| {
         let changed = d.can_ok != ok;
         if changed {
@@ -605,8 +605,8 @@ fn refresh_hot() {
         let hot = if under == d.hwnd {
             unsafe { ScreenToClient(d.hwnd, &mut at) };
             d.layout.part_at(at)
-        } else if under == d.command {
-            Some(Part::Command)
+        } else if under == d.phrase {
+            Some(Part::Phrase)
         } else if under == d.label {
             Some(Part::Label)
         } else {
@@ -632,25 +632,25 @@ unsafe fn track_leave(hwnd: HWND) {
     unsafe { TrackMouseEvent(&mut leave) };
 }
 
-/// The command in the box, or `None` while there is none.
-fn read() -> Option<Command> {
-    let (command, label, fill) = with_dialog(|d| (d.command, d.label, d.fill))?;
-    command_from(&text_of(command), &text_of(label), fill)
+/// The phrase in the box, or `None` while there is none.
+fn read() -> Option<Phrase> {
+    let (phrase, label, fill) = with_dialog(|d| (d.phrase, d.label, d.fill))?;
+    phrase_from(&text_of(phrase), &text_of(label), fill)
 }
 
 fn close(status: Status) {
     with_dialog(|d| d.status = status);
 }
 
-/// A command from what was typed: surrounding spaces trimmed, a blank label
-/// meaning none, and no command at all without command text.
-fn command_from(text: &str, label: &str, fill: bool) -> Option<Command> {
+/// A phrase from what was typed: surrounding spaces trimmed, a blank label
+/// meaning none, and no phrase at all without phrase text.
+fn phrase_from(text: &str, label: &str, fill: bool) -> Option<Phrase> {
     let text = text.trim();
     if text.is_empty() {
         return None;
     }
     let label = label.trim();
-    Some(Command {
+    Some(Phrase {
         text: text.into(),
         label: (!label.is_empty()).then(|| label.into()),
         mode: if fill { Mode::Fill } else { Mode::Send },
@@ -693,7 +693,7 @@ fn grow(rect: &RECT, by: i32) -> RECT {
 impl Dialog {
     fn field_of(&self, part: Part) -> Option<HWND> {
         match part {
-            Part::Command => Some(self.command),
+            Part::Phrase => Some(self.phrase),
             Part::Label => Some(self.label),
             _ => None,
         }
@@ -714,12 +714,12 @@ impl Dialog {
 
         // A line of 13px text is taller than the 13px caption: grown alike up and down,
         // so the text stays centered and its descenders are not cut off.
-        let [command, label] = l.captions.map(|r| RECT {
+        let [phrase, label] = l.captions.map(|r| RECT {
             top: r.top - s(CAPTION),
             bottom: r.bottom + s(CAPTION),
             ..r
         });
-        canvas.text_aligned(&f.strong, p.text, "Command", &command, Align::Left);
+        canvas.text_aligned(&f.strong, p.text, "Phrase", &phrase, Align::Left);
         canvas.text_aligned(&f.strong, p.text, "Label", &label, Align::Left);
         let optional = RECT {
             left: label.left + f.strong.width("Label"),
@@ -727,7 +727,7 @@ impl Dialog {
         };
         canvas.text_aligned(&f.text, p.text_muted, " (optional)", &optional, Align::Left);
         let field = field_color(p);
-        for (part, frame) in [(Part::Command, &l.fields[0]), (Part::Label, &l.fields[1])] {
+        for (part, frame) in [(Part::Phrase, &l.fields[0]), (Part::Label, &l.fields[1])] {
             let ring = if self.active && self.focus == part {
                 self.focus_ring(&canvas, frame, radius);
                 p.focus_inset
@@ -881,8 +881,8 @@ unsafe fn placeholder(field: HWND) {
         if GetWindowTextLengthW(field) != 0 {
             return;
         }
-        let hint = if GetDlgCtrlID(field) == COMMAND {
-            COMMAND_HINT
+        let hint = if GetDlgCtrlID(field) == PHRASE {
+            PHRASE_HINT
         } else {
             LABEL_HINT
         };
@@ -985,13 +985,13 @@ unsafe extern "system" fn dialog_proc(
             WM_COMMAND => {
                 let (id, code) = ((wparam & 0xffff) as i32, ((wparam >> 16) & 0xffff) as u32);
                 let part = match id {
-                    COMMAND => Part::Command,
+                    PHRASE => Part::Phrase,
                     LABEL => Part::Label,
                     _ => return 0,
                 };
                 match code {
                     EN_CHANGE => {
-                        if part == Part::Command {
+                        if part == Part::Phrase {
                             update_ok();
                         }
                         // The placeholder comes and goes.
@@ -1044,7 +1044,7 @@ unsafe extern "system" fn dialog_proc(
                 let mut at = POINT { x: 0, y: 0 };
                 GetCursorPos(&mut at);
                 ScreenToClient(hwnd, &mut at);
-                if let Some(Some(Part::Command | Part::Label)) =
+                if let Some(Some(Part::Phrase | Part::Label)) =
                     with_dialog(|d| d.layout.part_at(at))
                 {
                     SetCursor(LoadCursorW(std::ptr::null_mut(), IDC_IBEAM));
@@ -1134,24 +1134,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_command_is_no_command() {
-        assert_eq!(command_from("", "Label", false), None);
-        assert_eq!(command_from("   ", "", true), None);
+    fn empty_phrase_is_no_phrase() {
+        assert_eq!(phrase_from("", "Label", false), None);
+        assert_eq!(phrase_from("   ", "", true), None);
     }
 
     #[test]
     fn fields_are_trimmed_and_blank_label_is_none() {
         assert_eq!(
-            command_from("  /cost ", "  ", false),
-            Some(Command {
+            phrase_from("  /cost ", "  ", false),
+            Some(Phrase {
                 text: "/cost".into(),
                 label: None,
                 mode: Mode::Send,
             })
         );
         assert_eq!(
-            command_from("/review", " Review ", true),
-            Some(Command {
+            phrase_from("/review", " Review ", true),
+            Some(Phrase {
                 text: "/review".into(),
                 label: Some("Review".into()),
                 mode: Mode::Fill,
@@ -1179,7 +1179,7 @@ mod tests {
         let layout = Layout::new(|px| px, 40, 20);
         let at = |x, y| layout.part_at(POINT { x, y });
         assert_eq!(at(30, 30), None);
-        assert_eq!(at(30, layout.fields[0].top), Some(Part::Command));
+        assert_eq!(at(30, layout.fields[0].top), Some(Part::Phrase));
         assert_eq!(at(30, layout.switch_row.top), Some(Part::Switch));
         assert_eq!(at(layout.ok.left, layout.ok.top), Some(Part::Ok));
         assert_eq!(at(layout.cancel.right, layout.ok.top), None);
@@ -1206,11 +1206,11 @@ mod tests {
 
     #[test]
     fn tab_goes_round_and_passes_over_ok_while_greyed() {
-        assert_eq!(tab(Part::Command, false, true), Part::Label);
+        assert_eq!(tab(Part::Phrase, false, true), Part::Label);
         assert_eq!(tab(Part::Cancel, false, true), Part::Ok);
-        assert_eq!(tab(Part::Ok, false, true), Part::Command);
-        assert_eq!(tab(Part::Cancel, false, false), Part::Command);
-        assert_eq!(tab(Part::Command, true, false), Part::Cancel);
-        assert_eq!(tab(Part::Command, true, true), Part::Ok);
+        assert_eq!(tab(Part::Ok, false, true), Part::Phrase);
+        assert_eq!(tab(Part::Cancel, false, false), Part::Phrase);
+        assert_eq!(tab(Part::Phrase, true, false), Part::Cancel);
+        assert_eq!(tab(Part::Phrase, true, true), Part::Ok);
     }
 }

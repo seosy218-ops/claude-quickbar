@@ -3,8 +3,8 @@
 
 use super::*;
 
-fn command(text: &str, label: Option<&str>, mode: Mode) -> Command {
-    Command {
+fn phrase(text: &str, label: Option<&str>, mode: Mode) -> Phrase {
+    Phrase {
         text: text.into(),
         label: label.map(Into::into),
         mode,
@@ -39,8 +39,8 @@ fn full() -> Config {
             y: 4,
         },
         commands: vec![
-            command("/compact", None, Mode::Send),
-            command("/review", Some("Review"), Mode::Fill),
+            phrase("/compact", None, Mode::Send),
+            phrase("/review", Some("Review"), Mode::Fill),
         ],
         unreadable: false,
     }
@@ -75,7 +75,7 @@ fn shortest_hand_written_file() {
     let json = r#"{"commands": [{"command": "/clear"}]}"#;
     let config = serde_json::from_str::<Config>(json).unwrap();
     assert_eq!(config.position, Anchor::default());
-    assert_eq!(config.commands, [command("/clear", None, Mode::Send)]);
+    assert_eq!(config.commands, [phrase("/clear", None, Mode::Send)]);
 }
 
 #[test]
