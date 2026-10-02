@@ -1,4 +1,4 @@
-/** One button of the bar: what it types, what it shows, and whether it sends. */
+// The bar above the prompt: one button per phrase, then + and ✎.
 export type Phrase = {
   /** The text typed, as is: plain words, or a slash command with its arguments. */
   text: string
@@ -15,7 +15,6 @@ declare module 'claude-code' {
   interface PluginState {
     quickbar: {
       phrases: Phrase[] | null
-      isClosed: boolean
       isEditing: boolean
       selected: number | null
       form: Form | null

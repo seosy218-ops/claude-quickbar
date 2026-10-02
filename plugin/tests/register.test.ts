@@ -99,17 +99,6 @@ for (const surface of ['terminal', 'desktop'] as const) {
       await ui.unmount()
     })
 
-    test('the bolt hides and shows the phrases', async ($, on) => {
-      mock.store(on)
-      const ui = await $.ui.mount({ plugin: 'quickbar', surface, component: 'AbovePrompt', props })
-      await ui.press({ key: 'toggle' })
-      expect(await ui.find({ key: 'phrase-0' })).toBeUndefined()
-      expect(await ui.find({ key: 'toggle' })).toBeDefined()
-      await ui.press({ key: 'toggle' })
-      expect(await ui.find({ key: 'phrase-0' })).toBeDefined()
-      await ui.unmount()
-    })
-
     test('a slash phrase runs the command, args and all', async ($, on) => {
       mock.store(on, { phrases: [{ text: '/compact keep the plan', mode: 'send' }, { text: '/clear', mode: 'send' }] })
       const seen = engine(on, 'half a draft')
@@ -311,14 +300,13 @@ for (const surface of ['terminal', 'desktop'] as const) {
       await bar.unmount()
     })
 
-    test('folding leaves edit mode', async ($, on) => {
+    test('Done leaves edit mode', async ($, on) => {
       store(on, { phrases: [{ text: 'continue', mode: 'send' }] })
       const seen = engine(on)
       const ui = await $.ui.mount({ plugin: 'quickbar', surface, component: 'AbovePrompt', props })
       await ui.press({ key: 'edit' })
       await ui.press({ key: 'phrase-0' })
-      await ui.press({ key: 'toggle' })
-      await ui.press({ key: 'toggle' })
+      await ui.press({ key: 'edit' })
       expect(await ui.find({ key: 'edit', text: 'Done' })).toBeUndefined()
       expect(await ui.find({ key: 'left' })).toBeUndefined()
       await ui.press({ key: 'phrase-0' })
@@ -361,7 +349,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
         return h(Box, { key: 'engine' })
       })
       const ui = await $.ui.mount({ plugin: 'quickbar', surface, component: 'AbovePrompt', props: { ...props, hasSurvey: true } })
-      expect(await ui.find({ key: 'toggle' })).toBeUndefined()
+      expect(await ui.find({ key: 'edit' })).toBeUndefined()
       await ui.unmount()
     })
   })

@@ -1,4 +1,4 @@
-// The bar above the prompt: a bolt that folds the row, one button per phrase, then + and ✎.
+// The bar above the prompt: one button per phrase, then + and ✎.
 // Pressing a phrase types it as the person would (see `press`). ✎ turns on edit mode, where
 // pressing a phrase selects it and ◀ ▶ ✎ ✕ act on the selection; + and ✎ open the edit pane.
 
@@ -9,7 +9,6 @@ import type { Form, Phrase } from '../types'
 
 /** The phrases session.start loaded; null before it ran and again after /clear. */
 const phrases = atom({ plugin: 'quickbar', key: 'phrases' } as const, null)
-const isClosed = atom({ plugin: 'quickbar', key: 'isClosed' } as const, false)
 const isEditing = atom({ plugin: 'quickbar', key: 'isEditing' } as const, false)
 /** The phrase ◀ ▶ ✎ ✕ act on, by its place in the list. */
 const selected = atom({ plugin: 'quickbar', key: 'selected' } as const, null)
@@ -207,7 +206,6 @@ export const register: Register = on => {
     }
 
     const list = await current($)
-    const closed = await read($, isClosed)
     const editing = await read($, isEditing)
     const chosen = editing ? await read($, selected) : null
     const busy = await read($, running)
@@ -216,31 +214,19 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="row" flexWrap="wrap" gap={1}>
-        <Button
-          key="toggle"
-          label="⚡"
-          plain
-          onPress={async () => {
-            // Folding leaves edit mode, so the row comes back typing phrases.
-            await update($, isEditing, () => false)
-            await update($, selected, () => null)
-            await update($, isClosed, was => !was)
-          }}
-        />
-        {!closed &&
-          list.map((phrase, i) => (
-            <Button
-              key={`phrase-${i}`}
-              label={
-                i === busy || (compacting && isCompact(phrase))
-                  ? `${phrase.label ?? phrase.text} …`
-                  : (phrase.label ?? phrase.text)
-              }
-              variant={i === chosen ? 'primary' : undefined}
-              onPress={() => (editing ? update($, selected, () => i) : pressOnce($, phrase, i))}
-            />
-          ))}
-        {!closed && chosen !== null && chosen < list.length && [
+        {list.map((phrase, i) => (
+          <Button
+            key={`phrase-${i}`}
+            label={
+              i === busy || (compacting && isCompact(phrase))
+                ? `${phrase.label ?? phrase.text} …`
+                : (phrase.label ?? phrase.text)
+            }
+            variant={i === chosen ? 'primary' : undefined}
+            onPress={() => (editing ? update($, selected, () => i) : pressOnce($, phrase, i))}
+          />
+        ))}
+        {chosen !== null && chosen < list.length && [
           <Button key="left" label="◀" plain dimColor onPress={() => move($, -1)} />,
           <Button key="right" label="▶" plain dimColor onPress={() => move($, 1)} />,
           <Button
@@ -264,27 +250,23 @@ export const register: Register = on => {
             }}
           />,
         ]}
-        {!closed && (
-          <Button
-            key="add"
-            label="+"
-            plain
-            dimColor
-            onPress={() => openPane($, { index: null, text: '', label: '', mode: 'send' })}
-          />
-        )}
-        {!closed && (
-          <Button
-            key="edit"
-            label={editing ? 'Done' : '✎'}
-            plain
-            dimColor
-            onPress={async () => {
-              await update($, selected, () => null)
-              await update($, isEditing, was => !was)
-            }}
-          />
-        )}
+        <Button
+          key="add"
+          label="+"
+          plain
+          dimColor
+          onPress={() => openPane($, { index: null, text: '', label: '', mode: 'send' })}
+        />
+        <Button
+          key="edit"
+          label={editing ? 'Done' : '✎'}
+          plain
+          dimColor
+          onPress={async () => {
+            await update($, selected, () => null)
+            await update($, isEditing, was => !was)
+          }}
+        />
       </Box>
     )
   })
