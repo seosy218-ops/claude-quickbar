@@ -121,7 +121,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
         { command: 'clear', args: '' },
       ])
       expect(seen.submits).toEqual([])
-      expect(seen.fills).toEqual([])
+      expect(seen.fills).toEqual([{ text: '', mode: 'append' }, { text: '', mode: 'append' }])
       await ui.unmount()
     })
 
@@ -137,13 +137,14 @@ for (const surface of ['terminal', 'desktop'] as const) {
       await ui.press({ key: 'phrase-0' })
       expect(calls).toEqual([{ tool: 'mcp__ccd_session_mgmt__clear_session', session_id: 'self' }])
       expect(seen.runs).toEqual([{ command: 'quickbar-clear', args: '' }])
-      expect(seen.fills).toEqual([])
+      expect(seen.fills).toEqual([{ text: '', mode: 'append' }])
       await ui.unmount()
     })
 
     test('/compact says it is compacting before it runs', async ($, on) => {
       mock.store(on, { phrases: [{ text: '/compact', mode: 'send' }] })
       const order: string[] = []
+      on('prompt.fill', () => ({ isFilled: true }))
       on('ui.toast', ($, e) => {
         order.push(`toast ${e.text}`)
       })
@@ -161,6 +162,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       mock.store(on, { phrases: [{ text: '/compact', mode: 'send' }, { text: 'continue', mode: 'send' }] })
       let ui: Awaited<ReturnType<typeof $.ui.mount>> | undefined
       const runs: string[] = []
+      on('prompt.fill', () => ({ isFilled: true }))
       const during: (string | undefined)[] = []
       on('command.run', async ($, e) => {
         runs.push(e.command)
@@ -190,7 +192,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       await ui.press({ key: 'phrase-0' })
       expect(seen.submits).toEqual([{ text: 'continue' }])
       expect(seen.runs).toEqual([])
-      expect(seen.fills).toEqual([])
+      expect(seen.fills).toEqual([{ text: '', mode: 'append' }])
       await ui.unmount()
     })
 

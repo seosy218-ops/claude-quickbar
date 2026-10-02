@@ -1,6 +1,6 @@
 {
   "name": "quickbar",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "A row of phrase buttons above the prompt in the desktop Code tab: one click sends a phrase you use often",
   "author": { "name": "seosy" },
   "license": "MIT",

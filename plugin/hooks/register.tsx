@@ -167,6 +167,9 @@ async function pressOnce($: EngineInterface, phrase: Phrase, i: number) {
   } finally {
     await update($, running, () => null)
   }
+  // The click left the focus on the button; writing nothing to the box hands it back there,
+  // as a fill phrase's own write does, so the person types on without clicking the box.
+  await $.prompt.fill({ text: '', mode: 'append' })
 }
 
 const isCompact = (phrase: Phrase) => /^\/compact(\s|$)/.test(phrase.text)
