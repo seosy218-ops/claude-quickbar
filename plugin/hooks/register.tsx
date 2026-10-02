@@ -107,6 +107,9 @@ const DESKTOP_CLEAR = 'mcp__ccd_session_mgmt__clear_session'
 /** A command of ours that does nothing: its run is the turn ending that a queued desktop clear waits for. */
 const CLEAR_COMMAND = 'quickbar-clear'
 
+/** Long enough to stay up while a compaction usually runs; a click takes it off sooner. */
+const COMPACT_TOAST_MS = 15000
+
 async function hasTool($: EngineInterface, name: string) {
   return (await $.tool.list()).some(tool => tool.name === name)
 }
@@ -126,6 +129,11 @@ async function press($: EngineInterface, phrase: Phrase) {
     await $.tool.call({ tool: DESKTOP_CLEAR, session_id: 'self', consent: 'The user pressed "/clear" on the quickbar' })
     await $.command.run({ command: CLEAR_COMMAND })
     return
+  }
+  if (slash !== null && slash[1] === 'compact') {
+    // Run through the engine, the desktop shows none of its own compacting notice, only the one
+    // when it is done, and the desktop offers no compact of its own to call instead.
+    $.ui.toast('Compacting the conversation…', { timeoutMs: COMPACT_TOAST_MS })
   }
   if (slash !== null) {
     await $.command.run({ command: slash[1], args: slash[2] })

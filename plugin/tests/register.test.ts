@@ -141,6 +141,22 @@ for (const surface of ['terminal', 'desktop'] as const) {
       await ui.unmount()
     })
 
+    test('/compact says it is compacting before it runs', async ($, on) => {
+      mock.store(on, { phrases: [{ text: '/compact', mode: 'send' }] })
+      const order: string[] = []
+      on('ui.toast', ($, e) => {
+        order.push(`toast ${e.text}`)
+      })
+      on('command.run', ($, e) => {
+        order.push(`run ${e.command}`)
+        return { text: '' }
+      })
+      const ui = await $.ui.mount({ plugin: 'quickbar', surface, component: 'AbovePrompt', props })
+      await ui.press({ key: 'phrase-0' })
+      expect(order).toEqual(['toast Compacting the conversation…', 'run compact'])
+      await ui.unmount()
+    })
+
     test('a send still running shows on its button and a second press is not sent', async ($, on) => {
       mock.store(on, { phrases: [{ text: '/compact', mode: 'send' }, { text: 'continue', mode: 'send' }] })
       let ui: Awaited<ReturnType<typeof $.ui.mount>> | undefined
