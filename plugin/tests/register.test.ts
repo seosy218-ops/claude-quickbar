@@ -124,6 +124,32 @@ for (const surface of ['terminal', 'desktop'] as const) {
       await ui.unmount()
     })
 
+    test('a send still running shows on its button and a second press is not sent', async ($, on) => {
+      mock.store(on, { phrases: [{ text: '/compact', mode: 'send' }, { text: 'continue', mode: 'send' }] })
+      let ui: Awaited<ReturnType<typeof $.ui.mount>> | undefined
+      const runs: string[] = []
+      const during: (string | undefined)[] = []
+      on('command.run', async ($, e) => {
+        runs.push(e.command)
+        during.push((await ui?.find({ key: 'phrase-0' }))?.text)
+        await ui?.press({ key: 'phrase-0' })
+        await ui?.press({ key: 'phrase-1' })
+        return { text: '' }
+      })
+      const submits: string[] = []
+      on('prompt.submit', ($, e) => {
+        submits.push(e.text)
+        return { text: e.text }
+      })
+      ui = await $.ui.mount({ plugin: 'quickbar', surface, component: 'AbovePrompt', props })
+      await ui.press({ key: 'phrase-0' })
+      expect(runs).toEqual(['compact'])
+      expect(submits).toEqual([])
+      expect(during).toEqual(['/compact …'])
+      expect((await ui.find({ key: 'phrase-0' }))?.text).toBe('/compact')
+      await ui.unmount()
+    })
+
     test('a plain phrase is submitted and the draft is left alone', async ($, on) => {
       mock.store(on, { phrases: [{ text: 'continue', mode: 'send' }] })
       const seen = engine(on, 'half a draft')

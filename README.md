@@ -2,6 +2,8 @@
 
 A row of phrase buttons above the prompt box in the Claude desktop app's **Code** tab. One click types a phrase you use often into the session in front of you, as if you had typed it yourself: plain words such as `continue`, a slash command such as `/compact`, or a `/skill` followed by a sentence of what you want.
 
+![quickbar above the prompt box in the Code tab](assets/bar.png)
+
 quickbar is a Claude Code plugin: Claude Code draws the buttons with its own parts, so they look like the rest of the Code tab in light and dark themes.
 
 > [!IMPORTANT]
@@ -41,6 +43,8 @@ Then open a new session in the Code tab. The bar shows above the prompt box.
 - **⚡** folds the phrase buttons out and back in.
 - **Click a phrase** to type it into the session. A slash command runs as if typed; plain words are sent. Whatever you had half-typed in the prompt box stays there.
 - **`+`** adds a phrase: the text to type (anything you would type yourself, e.g. `continue` or `/compact keep the plan`), an optional label for the button, and a switch between **Click sends** and **Fill only, no send**. A fill-only phrase is put in the prompt box ahead of your draft, for you to finish and send.
+
+  ![Adding a phrase in a pane beside the session](assets/pane-add.png)
 - **✎** turns on edit mode. There, clicking a phrase selects it instead of sending it, and four buttons act on the selection: **◀ ▶** move it, **✎** edits it, **✕** deletes it. **Done** or ⚡ leaves edit mode.
 
 The first session starts with `/compact`, `/clear` and `continue`. Your phrases are kept in `%USERPROFILE%\.claude\plugins\store\` and are the same in every session and project.

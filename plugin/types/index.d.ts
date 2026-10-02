@@ -19,6 +19,8 @@ declare module 'claude-code' {
       isEditing: boolean
       selected: number | null
       form: Form | null
+      running: number | null
+      isCompacting: boolean
     }
   }
 }

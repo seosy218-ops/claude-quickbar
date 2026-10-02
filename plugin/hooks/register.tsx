@@ -14,6 +14,10 @@ const isEditing = atom({ plugin: 'quickbar', key: 'isEditing' } as const, false)
 /** The phrase ◀ ▶ ✎ ✕ act on, by its place in the list. */
 const selected = atom({ plugin: 'quickbar', key: 'selected' } as const, null)
 const form = atom({ plugin: 'quickbar', key: 'form' } as const, null)
+/** The phrase whose send is still running, by its place in the list. */
+const running = atom({ plugin: 'quickbar', key: 'running' } as const, null)
+/** True while the main conversation compacts, however it was asked for. */
+const isCompacting = atom({ plugin: 'quickbar', key: 'isCompacting' } as const, false)
 
 const PANE = 'quickbar-edit'
 
@@ -69,7 +73,8 @@ async function openPane($: EngineInterface, filled: Form) {
     focus: true,
     closeOnEscape: true,
     holdToasts: true,
-    rows: 6,
+    // A desktop draws a field and a button taller than a terminal row: ask for room for all three rows.
+    rows: 12,
   })
 }
 
@@ -111,6 +116,23 @@ async function press($: EngineInterface, phrase: Phrase) {
   await $.prompt.submit({ text: phrase.text, asUser: true })
 }
 
+/** A slash command such as /compact shows nothing until it ends, so the button stays busy till then and a second press is not sent. */
+async function pressOnce($: EngineInterface, phrase: Phrase, i: number) {
+  if (phrase.mode === 'send' && ((await read($, running)) !== null || (await read($, isCompacting)))) {
+    $.ui.toast('Still working on the last one')
+    return
+  }
+  if (phrase.mode === 'fill') return press($, phrase)
+  await update($, running, () => i)
+  try {
+    await press($, phrase)
+  } finally {
+    await update($, running, () => null)
+  }
+}
+
+const isCompact = (phrase: Phrase) => /^\/compact(\s|$)/.test(phrase.text)
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const out = await next(e)
@@ -123,6 +145,16 @@ export const register: Register = on => {
     return out
   })
 
+  on('session.compact', async ($, e, next) => {
+    if (e.trigger === 'precompute' || e.agentId !== undefined) return next(e)
+    await update($, isCompacting, () => true)
+    try {
+      return await next(e)
+    } finally {
+      await update($, isCompacting, () => false)
+    }
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) {
       return next(e)
@@ -132,6 +164,8 @@ export const register: Register = on => {
     const closed = await read($, isClosed)
     const editing = await read($, isEditing)
     const chosen = editing ? await read($, selected) : null
+    const busy = await read($, running)
+    const compacting = await read($, isCompacting)
     const { Box, Button } = $.ui.resolve(e)
 
     return (
@@ -151,9 +185,13 @@ export const register: Register = on => {
           list.map((phrase, i) => (
             <Button
               key={`phrase-${i}`}
-              label={phrase.label ?? phrase.text}
+              label={
+                i === busy || (compacting && isCompact(phrase))
+                  ? `${phrase.label ?? phrase.text} …`
+                  : (phrase.label ?? phrase.text)
+              }
               variant={i === chosen ? 'primary' : undefined}
-              onPress={() => (editing ? update($, selected, () => i) : press($, phrase))}
+              onPress={() => (editing ? update($, selected, () => i) : pressOnce($, phrase, i))}
             />
           ))}
         {!closed && chosen !== null && chosen < list.length && [
@@ -213,7 +251,7 @@ export const register: Register = on => {
     }
 
     return (
-      <Box flexDirection="column" gap={1}>
+      <Box flexDirection="column" gap={1} paddingY={1}>
         <Input
           key="text"
           label="Phrase"
