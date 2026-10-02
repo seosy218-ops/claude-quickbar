@@ -101,6 +101,16 @@ async function submit($: EngineInterface) {
   await $.ui.close({ id: PANE })
 }
 
+/** The desktop app's own /clear, offered to the session as a tool. */
+const DESKTOP_CLEAR = 'mcp__ccd_session_mgmt__clear_session'
+
+/** A command of ours that does nothing: its run is the turn ending that a queued desktop clear waits for. */
+const CLEAR_COMMAND = 'quickbar-clear'
+
+async function hasTool($: EngineInterface, name: string) {
+  return (await $.tool.list()).some(tool => tool.name === name)
+}
+
 /** Types the phrase as the person would: a slash command runs, words are sent, a fill phrase goes before the draft. */
 async function press($: EngineInterface, phrase: Phrase) {
   if (phrase.mode === 'fill') {
@@ -109,6 +119,14 @@ async function press($: EngineInterface, phrase: Phrase) {
     return
   }
   const slash = /^\/(\S+)\s*([\s\S]*)$/.exec(phrase.text)
+  if (slash !== null && slash[1] === 'clear' && (await hasTool($, DESKTOP_CLEAR))) {
+    // The desktop handles a typed /clear itself; run through the engine it empties the context
+    // but leaves the old conversation on screen. The desktop's own clear waits for a turn to end,
+    // and between turns none will, so an empty command of ours ends one.
+    await $.tool.call({ tool: DESKTOP_CLEAR, session_id: 'self', consent: 'The user pressed "/clear" on the quickbar' })
+    await $.command.run({ command: CLEAR_COMMAND })
+    return
+  }
   if (slash !== null) {
     await $.command.run({ command: slash[1], args: slash[2] })
     return
@@ -142,7 +160,12 @@ export const register: Register = on => {
     }
     const loaded = (await stored($)) ?? DEFAULTS
     await update($, phrases, () => loaded)
+    await $.command.register({ name: CLEAR_COMMAND, description: 'Ends the turn a quickbar /clear waits for; does nothing on its own' })
     return out
+  })
+
+  on('command.run', { command: CLEAR_COMMAND }, async $ => {
+    return { text: '' }
   })
 
   on('session.compact', async ($, e, next) => {

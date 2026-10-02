@@ -3,8 +3,8 @@ import type { On } from 'claude-code'
 
 const props = { hasSurvey: false, isWorking: false, maxRows: 4, bodyColumns: 80 }
 
-/** Records what reaches the engine beneath the plugin: runs, submits and fills, with `draft` in the box. */
-function engine(on: On, draft = '') {
+/** Records what reaches the engine beneath the plugin: runs, submits and fills, with `draft` in the box and `tools` offered. */
+function engine(on: On, draft = '', tools: string[] = []) {
   const seen: { runs: unknown[]; submits: unknown[]; fills: unknown[] } = { runs: [], submits: [], fills: [] }
   on('command.run', ($, e) => {
     seen.runs.push({ command: e.command, args: e.args })
@@ -15,6 +15,7 @@ function engine(on: On, draft = '') {
     return { text: e.text }
   })
   on('prompt.read', () => ({ value: { text: draft, cursor: draft.length } }))
+  on('tool.list', () => ({ value: tools.map(name => ({ name, description: name, isMcp: true })) }))
   on('prompt.fill', ($, e) => {
     seen.fills.push({ text: e.text, mode: e.mode })
     return { isFilled: true, text: e.text, cursor: e.text.length }
@@ -120,6 +121,22 @@ for (const surface of ['terminal', 'desktop'] as const) {
         { command: 'clear', args: '' },
       ])
       expect(seen.submits).toEqual([])
+      expect(seen.fills).toEqual([])
+      await ui.unmount()
+    })
+
+    test('/clear asks the desktop app to clear, then ends a turn for it', async ($, on) => {
+      mock.store(on, { phrases: [{ text: '/clear', mode: 'send' }] })
+      const seen = engine(on, 'half a draft', ['mcp__ccd_session_mgmt__clear_session'])
+      const calls: unknown[] = []
+      on('tool.call', ($, e) => {
+        calls.push({ tool: e.tool, session_id: (e as { session_id?: string }).session_id })
+        return { result: 'queued' }
+      })
+      const ui = await $.ui.mount({ plugin: 'quickbar', surface, component: 'AbovePrompt', props })
+      await ui.press({ key: 'phrase-0' })
+      expect(calls).toEqual([{ tool: 'mcp__ccd_session_mgmt__clear_session', session_id: 'self' }])
+      expect(seen.runs).toEqual([{ command: 'quickbar-clear', args: '' }])
       expect(seen.fills).toEqual([])
       await ui.unmount()
     })
