@@ -1,0 +1,12 @@
+{
+  "name": "quickbar",
+  "owner": { "name": "seosy" },
+  "metadata": { "description": "quickbar, a phrase bar for the Claude Code desktop Code tab" },
+  "plugins": [
+    {
+      "name": "quickbar",
+      "source": "./plugin",
+      "description": "A row of phrase buttons above the prompt in the desktop Code tab: one click sends a phrase you use often"
+    }
+  ]
+}
