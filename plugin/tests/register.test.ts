@@ -277,9 +277,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       const editor = await $.ui.mount({ plugin: 'quickbar', surface, component: 'Pane', props: pane, requestId: 'quickbar-edit' })
       await editor.input({ key: 'text', text: '/skill grill', kind: 'change' })
       await editor.input({ key: 'label', text: 'Grill', kind: 'change' })
-      expect(await editor.find({ key: 'mode', text: 'Click sends' })).toBeDefined()
-      await editor.press({ key: 'mode' })
-      expect(await editor.find({ key: 'mode', text: 'Fill only, no send' })).toBeDefined()
+      await editor.press({ key: 'mode-fill' })
       await editor.press({ key: 'save' })
       expect(saved.at(-1)).toEqual([
         { text: 'a', mode: 'send' },
@@ -301,7 +299,6 @@ for (const surface of ['terminal', 'desktop'] as const) {
       const editor = await $.ui.mount({ plugin: 'quickbar', surface, component: 'Pane', props: pane, requestId: 'quickbar-edit' })
       expect(await editor.find({ key: 'text', text: 'b' })).toBeDefined()
       expect(await editor.find({ key: 'label', text: 'B' })).toBeDefined()
-      expect(await editor.find({ key: 'mode', text: 'Fill only, no send' })).toBeDefined()
       await editor.input({ key: 'label', text: '', kind: 'change' })
       await editor.input({ key: 'text', text: 'bee' })
       expect(saved.at(-1)).toEqual([
@@ -337,6 +334,20 @@ for (const surface of ['terminal', 'desktop'] as const) {
       await editor.press({ key: 'save' })
       expect(saved).toEqual([])
       expect(seen.closed).toEqual([])
+      await editor.unmount()
+      await bar.unmount()
+    })
+
+    test('Cancel closes the pane and saves nothing', async ($, on) => {
+      const saved = store(on, { phrases: [] })
+      const seen = panes(on)
+      const bar = await $.ui.mount({ plugin: 'quickbar', surface, component: 'AbovePrompt', props })
+      await bar.press({ key: 'add' })
+      const editor = await $.ui.mount({ plugin: 'quickbar', surface, component: 'Pane', props: pane, requestId: 'quickbar-edit' })
+      await editor.input({ key: 'text', text: 'continue', kind: 'change' })
+      await editor.press({ key: 'cancel' })
+      expect(saved).toEqual([])
+      expect(seen.closed).toEqual(['quickbar-edit'])
       await editor.unmount()
       await bar.unmount()
     })

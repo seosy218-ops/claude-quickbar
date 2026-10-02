@@ -23,6 +23,12 @@ const PANE = 'quickbar-edit'
 
 const STORE_KEY = 'phrases'
 
+/** The two ways a press can go, as the pane offers them, worded for someone who has not met them. */
+const MODES: { value: Phrase['mode']; label: string; hint: string }[] = [
+  { value: 'send', label: 'Send right away', hint: 'Sends at once; your draft stays' },
+  { value: 'fill', label: 'Put in the box only', hint: 'Goes before your draft, unsent' },
+]
+
 const DEFAULTS: Phrase[] = [
   { text: '/compact', mode: 'send' },
   { text: '/clear', mode: 'send' },
@@ -73,8 +79,8 @@ async function openPane($: EngineInterface, filled: Form) {
     focus: true,
     closeOnEscape: true,
     holdToasts: true,
-    // A desktop draws a field and a button taller than a terminal row: ask for room for all three rows.
-    rows: 12,
+    // A desktop draws a field and a button taller than a terminal row: ask for room for every row.
+    rows: 20,
   })
 }
 
@@ -97,6 +103,12 @@ async function submit($: EngineInterface) {
   await save($, list =>
     held.index === null ? [...list, phrase] : list.map((one, i) => (i === held.index ? phrase : one)),
   )
+  await update($, form, () => null)
+  await $.ui.close({ id: PANE })
+}
+
+/** Closes the pane and drops what it held, saving nothing. */
+async function cancel($: EngineInterface) {
   await update($, form, () => null)
   await $.ui.close({ id: PANE })
 }
@@ -281,42 +293,63 @@ export const register: Register = on => {
       return <Text dimColor>Nothing to edit.</Text>
     }
 
+    // Laid out as the desktop's own menus are: a dim heading over each part, and the two ways a
+    // press can go as rows of a name and a dim line on what it does, a check on the one picked.
+    // The whole form sits in the middle of the rows the pane shows, not at its top. The body is only
+    // as tall as its tree, so the height is asked for in rows; a taller form still grows and scrolls.
     return (
-      <Box flexDirection="column" gap={1} paddingY={1}>
-        <Input
-          key="text"
-          label="Phrase"
-          placeholder="continue, /compact, or a /skill and what to ask"
-          value={held.text}
-          autoFocus
-          onInput={value => typeInto($, 'text', value)}
-          onSubmit={async value => {
-            await typeInto($, 'text', value)
-            await submit($)
-          }}
-        />
-        <Input
-          key="label"
-          label="Label"
-          placeholder="optional; the phrase when empty"
-          value={held.label}
-          onInput={value => typeInto($, 'label', value)}
-          onSubmit={async value => {
-            await typeInto($, 'label', value)
-            await submit($)
-          }}
-        />
-        <Box flexDirection="row" gap={1}>
-          <Button
-            key="mode"
-            label={held.mode === 'send' ? 'Click sends' : 'Fill only, no send'}
-            onPress={() =>
-              update($, form, was =>
-                was === null ? was : { ...was, mode: was.mode === 'send' ? 'fill' : 'send' },
-              )
-            }
-          />
-          <Button key="save" label="Save" variant="primary" onPress={() => submit($)} />
+      <Box flexDirection="column" minHeight={e.props.scroll.bodyRows} justifyContent="center" paddingY={1}>
+        <Box flexDirection="column" gap={2}>
+          <Box flexDirection="column" gap={1}>
+            <Text dimColor>Phrase</Text>
+            <Input
+              key="text"
+              placeholder="continue, /compact, /skill …"
+              value={held.text}
+              autoFocus
+              onInput={value => typeInto($, 'text', value)}
+              onSubmit={async value => {
+                await typeInto($, 'text', value)
+                await submit($)
+              }}
+            />
+          </Box>
+          <Box flexDirection="column" gap={1}>
+            <Text dimColor>Label</Text>
+            <Input
+              key="label"
+              placeholder="Optional; shows the phrase"
+              value={held.label}
+              onInput={value => typeInto($, 'label', value)}
+              onSubmit={async value => {
+                await typeInto($, 'label', value)
+                await submit($)
+              }}
+            />
+          </Box>
+          <Box flexDirection="column" gap={1}>
+            <Text dimColor>When pressed</Text>
+            {MODES.map(mode => (
+              <Box key={`row-${mode.value}`} flexDirection="row">
+                <Box width={2}>
+                  <Text>{held.mode === mode.value ? '✓' : ''}</Text>
+                </Box>
+                <Box flexDirection="column">
+                  <Button
+                    key={`mode-${mode.value}`}
+                    label={mode.label}
+                    plain
+                    onPress={() => update($, form, was => (was === null ? was : { ...was, mode: mode.value }))}
+                  />
+                  <Text dimColor>{mode.hint}</Text>
+                </Box>
+              </Box>
+            ))}
+          </Box>
+          <Box flexDirection="row" gap={1}>
+            <Button key="cancel" label="Cancel" onPress={() => cancel($)} />
+            <Button key="save" label="Save" variant="primary" onPress={() => submit($)} />
+          </Box>
         </Box>
       </Box>
     )
