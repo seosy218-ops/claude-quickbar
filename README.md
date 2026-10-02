@@ -40,12 +40,11 @@ Then open a new session in the Code tab. The bar shows above the prompt box.
 
 ## Use
 
-- **⚡** folds the phrase buttons out and back in.
 - **Click a phrase** to type it into the session. A slash command runs as if typed; plain words are sent. Whatever you had half-typed in the prompt box stays there.
 - **`+`** adds a phrase: the text to type (anything you would type yourself, e.g. `continue` or `/compact keep the plan`), an optional label for the button, and what a click does: **Send right away**, or **Put in the box only**, which puts the phrase in the prompt box ahead of your draft for you to finish and send.
 
   ![The pane for adding a phrase](assets/pane-add.png)
-- **✎** turns on edit mode. There, clicking a phrase selects it instead of sending it, and four buttons act on the selection: **◀ ▶** move it, **✎** edits it, **✕** deletes it. **Done** or ⚡ leaves edit mode.
+- **✎** turns on edit mode. There, clicking a phrase selects it instead of sending it, and four buttons act on the selection: **◀ ▶** move it, **✎** edits it, **✕** deletes it. **Done** leaves edit mode.
 
 The first session starts with `/compact`, `/clear` and `continue`. Your phrases are kept in `%USERPROFILE%\.claude\plugins\store\` and are the same in every session and project.
 
