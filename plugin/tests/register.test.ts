@@ -300,6 +300,23 @@ for (const surface of ['terminal', 'desktop'] as const) {
       await bar.unmount()
     })
 
+    test('typing does not redraw the pane and picking a mode keeps what was typed', async ($, on) => {
+      store(on, { phrases: [{ text: 'b', label: 'B', mode: 'fill' }] })
+      panes(on)
+      const bar = await $.ui.mount({ plugin: 'quickbar', surface, component: 'AbovePrompt', props })
+      await bar.press({ key: 'edit' })
+      await bar.press({ key: 'phrase-0' })
+      await bar.press({ key: 'change' })
+      const editor = await $.ui.mount({ plugin: 'quickbar', surface, component: 'Pane', props: pane, requestId: 'quickbar-edit' })
+      await editor.input({ key: 'text', text: '你好', kind: 'change' })
+      expect(await editor.find({ key: 'text', text: 'b' })).toBeDefined()
+      await editor.press({ key: 'mode-send' })
+      expect(await editor.find({ key: 'text', text: '你好' })).toBeDefined()
+      expect(await editor.find({ key: 'label', text: 'B' })).toBeDefined()
+      await editor.unmount()
+      await bar.unmount()
+    })
+
     test('Done leaves edit mode', async ($, on) => {
       store(on, { phrases: [{ text: 'continue', mode: 'send' }] })
       const seen = engine(on)

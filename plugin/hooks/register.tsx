@@ -12,7 +12,14 @@ const phrases = atom({ plugin: 'quickbar', key: 'phrases' } as const, null)
 const isEditing = atom({ plugin: 'quickbar', key: 'isEditing' } as const, false)
 /** The phrase ◀ ▶ ✎ ✕ act on, by its place in the list. */
 const selected = atom({ plugin: 'quickbar', key: 'selected' } as const, null)
+/** The pane's fields as typed so far; never read while drawing, so typing does not redraw the pane. */
 const form = atom({ plugin: 'quickbar', key: 'form' } as const, null)
+/**
+ * The form as the pane last drew it, taken from `form` only when something other than typing
+ * changes it. A redraw mid-word breaks an input method's composing on desktop: pinyin lands as
+ * letters (docs/upstream.md).
+ */
+const drawn = atom({ plugin: 'quickbar', key: 'drawn' } as const, null)
 /** The phrase whose send is still running, by its place in the list. */
 const running = atom({ plugin: 'quickbar', key: 'running' } as const, null)
 /** True while the main conversation compacts, however it was asked for. */
@@ -72,6 +79,7 @@ async function move($: EngineInterface, by: -1 | 1) {
 /** Opens the pane on `filled`: a new phrase, or one of the list to change. */
 async function openPane($: EngineInterface, filled: Form) {
   await update($, form, () => filled)
+  await update($, drawn, () => filled)
   await $.ui.open({
     id: PANE,
     title: filled.index === null ? 'Add a phrase' : 'Edit the phrase',
@@ -88,6 +96,12 @@ function typeInto($: EngineInterface, field: 'text' | 'label', value: string) {
   return update($, form, was => (was === null ? was : { ...was, [field]: value }))
 }
 
+/** Picks how a press goes; the redraw shows the fields as typed, not as the pane opened. */
+async function pickMode($: EngineInterface, mode: Phrase['mode']) {
+  const held = await update($, form, was => (was === null ? was : { ...was, mode }))
+  await update($, drawn, () => held)
+}
+
 /** Saves what the pane holds and closes it; a phrase with no text is not saved. */
 async function submit($: EngineInterface) {
   const held = await read($, form)
@@ -102,13 +116,13 @@ async function submit($: EngineInterface) {
   await save($, list =>
     held.index === null ? [...list, phrase] : list.map((one, i) => (i === held.index ? phrase : one)),
   )
-  await update($, form, () => null)
-  await $.ui.close({ id: PANE })
+  await cancel($)
 }
 
 /** Closes the pane and drops what it held, saving nothing. */
 async function cancel($: EngineInterface) {
   await update($, form, () => null)
+  await update($, drawn, () => null)
   await $.ui.close({ id: PANE })
 }
 
@@ -272,7 +286,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const held = await read($, form)
+    const held = await read($, drawn)
     const { Box, Button, Input, Text } = $.ui.resolve(e)
     if (held === null) {
       return <Text dimColor>Nothing to edit.</Text>
@@ -324,7 +338,7 @@ export const register: Register = on => {
                     key={`mode-${mode.value}`}
                     label={mode.label}
                     plain
-                    onPress={() => update($, form, was => (was === null ? was : { ...was, mode: mode.value }))}
+                    onPress={() => pickMode($, mode.value)}
                   />
                   <Text dimColor>{mode.hint}</Text>
                 </Box>
